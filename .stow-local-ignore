@@ -18,3 +18,4 @@ _darcs
 ^/README.*
 ^/LICENSE.*
 ^/COPYING
+.gitconfig

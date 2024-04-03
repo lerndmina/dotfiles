@@ -1,2 +1,5 @@
 
 Scripts/api_key
+.wakatime.cfg
+.xsession-errors
+.yarnrc
