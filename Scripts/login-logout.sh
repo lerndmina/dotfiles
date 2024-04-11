@@ -15,7 +15,7 @@ touch $LOCKFILE
 dbus-monitor --session "type='signal',interface='org.gnome.ScreenSaver'" |
   while read x; do
     case "$x" in
-    *"boolean true"*) bash /home/wild/Scripts/stop-replay.sh ;;
-    *"boolean false"*) bash /home/wild/Scripts/start-replay.sh ;;
+    *"boolean true"*) bash $HOME/Scripts/stop-replay.sh ;;
+    *"boolean false"*) bash $HOME/Scripts/start-replay.sh ;;
     esac
   done

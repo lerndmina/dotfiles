@@ -1,6 +1,6 @@
 #!/bin/bash
 # Load setup.sh, which contains api_key and base_url
-source /home/wild/Scripts/setup.sh
+source $HOME/Scripts/setup.sh
 
 # Get clipboard content
 clipboard_content=$(xclip -selection clipboard -o)
@@ -27,4 +27,4 @@ else
 fi
 
 curl -H "authorization: $api_key" $BASE_URL/api/shorten -H "Content-Type: application/json" -d "{\"url\": \"$url\"}" | jq -r '.url' | tr -d '\n' | xsel -ib
-bash /home/wild/Scripts/final.sh
+bash $HOME/Scripts/final.sh

@@ -53,7 +53,7 @@ if [ ! -z "$TO_INSTALL" ]; then
   sudo apt install -y $TO_INSTALL
 fi
 
-APIKEY_FILE="/home/wild/Scripts/api_key"
+APIKEY_FILE="$HOME/Scripts/api_key"
 BASE_URL="https://shrt.zip"
 
 while true; do

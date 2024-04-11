@@ -1,5 +1,5 @@
 #!/bin/bash
-source /home/wild/Scripts/setup.sh
+source $HOME/Scripts/setup.sh
 
 cleanup() {
   echo "DEBUG: cleanup function has been called"
@@ -24,4 +24,4 @@ if [ ! -s /tmp/ss.png ]; then
 fi
 
 curl -H "authorization: $api_key" $BASE_URL/api/upload -F file=@/tmp/ss.png -H "Content-Type: multipart/form-data" -H "Format: random" -H "Embed: true" | jq -r '.files[0]' | tr -d '\n' | xsel -ib
-bash /home/wild/Scripts/final.sh
+bash $HOME/Scripts/final.sh
