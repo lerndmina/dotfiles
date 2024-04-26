@@ -1,5 +1,8 @@
-
 Scripts/api_key
 .wakatime.cfg
 .xsession-errors
 .yarnrc
+.ssh/known_hosts.old
+.ssh/known_hosts
+.wget-hsts
+.directory

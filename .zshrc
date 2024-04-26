@@ -120,3 +120,5 @@ for file in ~/.zsh-extras/*; do
   source $file
 done
 
+# bun completions
+[ -s "/home/wild/.bun/_bun" ] && source "/home/wild/.bun/_bun"

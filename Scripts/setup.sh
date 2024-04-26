@@ -60,15 +60,21 @@ while true; do
   # Check if .api_key exists in the current directory and is not empty
   if [ ! -s $APIKEY_FILE ]; then
     api_key=$(zenity --entry --text "Enter your API key:")
+    # Check if user entered anything
+    if [ -z "$api_key" ]; then
+      rm $LOCKFILE
+      exit 1
+    fi
     echo "$api_key" >$APIKEY_FILE
     zenity --info --text "API key saved to $APIKEY_FILE"
   else
     echo "DEBUG API key found in $APIKEY_FILE"
     api_key=$(cat $APIKEY_FILE)
+    echo "API key: $api_key"
   fi
 
   # Check if API key is valid
-  response=$(curl -s -o /dev/null -w "%{http_code}" -H "authorization: $api_key" "$BASE_URL/api/user/recent?take=1")
+  response=$(curl -s -o /dev/null -w "%{http_code}" -H "authorization: $api_key" "$BASE_URL/api/user")
   if [ "$response" -eq 200 ]; then
     break
   else
