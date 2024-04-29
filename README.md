@@ -7,5 +7,5 @@ This repository contains my personal dotfiles. They are managed using [GNU Stow]
 
 ### Installing
 ```bash
-wget https://raw.githubusercontent.com/lerndmina/dotfiles/master/install.sh
+curl -L https://raw.githubusercontent.com/lerndmina/dotfiles/master/install.sh | bash
 ```
