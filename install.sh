@@ -1,5 +1,20 @@
 #!/bin/bash
 
+function cloneAndStow() {
+  cd $HOME
+
+  # Clone the git repository
+  git clone https://github.com/lerndmina/dotfiles.git
+
+  # Navigate into the cloned repository
+  cd $HOME/dotfiles
+
+  # Run stow
+  stow .
+
+  exit
+}
+
 # Initialize an empty array to hold packages to install
 packages_to_install=()
 
@@ -15,10 +30,10 @@ if ! command -v stow &>/dev/null; then
   packages_to_install+=("stow")
 fi
 
-# If there are no packages to install, exit
+# If there are no packages to install clone then stow
 if [ ${#packages_to_install[@]} -eq 0 ]; then
   echo "All required packages are installed"
-  exit
+  cloneAndStow
 fi
 
 # Detect the Linux distribution
@@ -37,11 +52,4 @@ else
   exit
 fi
 
-# Clone the git repository
-git https://github.com/lerndmina/dotfiles.git
-
-# Navigate into the cloned repository
-cd dotfiles
-
-# Run stow
-stow .
+cloneAndStow
