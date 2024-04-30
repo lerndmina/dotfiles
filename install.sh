@@ -92,7 +92,8 @@ elif [[ $OS == *"Fedora"* ]]; then
 elif [[ $OS == *"Arch"* ]]; then
   sudo pacman -Syu "${packages_to_install[@]}"
 else
-  echo "Unsupported distribution"
+  echo "Unsupported distribution install the following packages manually"
+  echo "${packages_to_install[@]}"
   exit
 fi
 
