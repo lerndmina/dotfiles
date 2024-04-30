@@ -39,6 +39,12 @@ if ! command -v zsh &>/dev/null; then
   packages_to_install+=("zsh")
 fi
 
+# Check if fastfetch is installed
+if ! command -v fastfetch &>/dev/null; then
+  echo "fastfetch could not be found, adding to install list"
+  packages_to_install+=("fastfetch")
+fi
+
 # Check if stow is installed
 if ! command -v stow &>/dev/null; then
   echo "stow could not be found, adding to install list"
