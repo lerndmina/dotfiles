@@ -3,6 +3,14 @@
 function cloneAndStow() {
   cd $HOME
 
+  # Install oh-my-zsh
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+  # install powerlevel10k
+  git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k
+
+  # Remove .zshrc
+  rm $HOME/.zshrc
+
   # Clone the git repository
   git clone https://github.com/lerndmina/dotfiles.git
 
@@ -10,7 +18,8 @@ function cloneAndStow() {
   cd $HOME/dotfiles
 
   # Run stow
-  stow .
+  stow --adopt .
+  git restore .
 
   exit
 }
@@ -22,6 +31,12 @@ packages_to_install=()
 if ! command -v git &>/dev/null; then
   echo "git could not be found, adding to install list"
   packages_to_install+=("git")
+fi
+
+# Check if zsh is installed
+if ! command -v zsh &>/dev/null; then
+  echo "zsh could not be found, adding to install list"
+  packages_to_install+=("zsh")
 fi
 
 # Check if stow is installed
