@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# Check if user has sudo access
+sudo -l &>/dev/null
+if [ $? -ne 0 ]; then
+  echo "You do not have sudo access."
+  exit 1
+fi
+
 function cloneAndStow() {
   cd $HOME
 
@@ -64,6 +71,7 @@ fi
 
 # Check if fastfetch is installed
 if ! command -v fastfetch &>/dev/null; then
+  sudo add-apt-repository ppa:zhangsongcui3371/fastfetch
   echo "fastfetch could not be found, adding to install list"
   packages_to_install+=("fastfetch")
 fi
