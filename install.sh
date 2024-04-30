@@ -24,6 +24,29 @@ function cloneAndStow() {
   exit
 }
 
+# Ask if you want to install your public key
+read -p "Do you want to install your public key? (y/n) " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+  # Check if .ssh directory exists, if not, create it
+  if [ ! -d "$HOME/.ssh" ]; then
+    mkdir $HOME/.ssh
+    chmod 700 $HOME/.ssh
+  fi
+
+  # Check if authorized_keys file exists, if not, create it
+  if [ ! -f "$HOME/.ssh/authorized_keys" ]; then
+    touch $HOME/.ssh/authorized_keys
+    chmod 600 $HOME/.ssh/authorized_keys
+  fi
+  # Request the public key
+  read -p "Enter your public key: " public_key
+  # Add the public key to the authorized_keys file
+  echo "$public_key" >>$HOME/.ssh/authorized_keys
+  # Restart ssh service
+  sudo systemctl restart ssh
+fi
+
 # Initialize an empty array to hold packages to install
 packages_to_install=()
 
