@@ -10,6 +10,10 @@ fi
 function cloneAndStow() {
   cd $HOME
 
+  echo "Installing oh-my-zsh"
+  echo ""
+  echo "===================="
+  echo "IMPORTANT: You will need to exit your shell with CTRL+D before the script can continue as oh-my-zsh will put you in a new shell which will not have the dotfiles installed."
   # Install oh-my-zsh
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
   # install powerlevel10k
