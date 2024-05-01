@@ -33,7 +33,7 @@ function cloneAndStow() {
 
 # Ask if you want to install your public key
 read -p "Do you want to install your public key? (y/n) " -n 1 -r
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [[ $REPLY =~ "^[Yy]$" ]]; then
   # Check if .ssh directory exists, if not, create it
   if [ ! -d "$HOME/.ssh" ]; then
     mkdir $HOME/.ssh
