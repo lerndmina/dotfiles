@@ -93,20 +93,32 @@ if [ ${#packages_to_install[@]} -eq 0 ]; then
   cloneAndStow
 fi
 
-# Detect the Linux distribution
-OS="$(awk -F= '/^NAME/{print $2}' /etc/os-release)"
+# Detect the operating system
+OS="$(uname)"
 
-# Install packages based on the distribution
-if [[ $OS == *"Ubuntu"* ]]; then
-  sudo apt-get update
-  sudo apt-get install -y "${packages_to_install[@]}"
-elif [[ $OS == *"Fedora"* ]]; then
-  sudo dnf install -y "${packages_to_install[@]}"
-elif [[ $OS == *"Arch"* ]]; then
-  sudo pacman -Syu "${packages_to_install[@]}"
+# Install packages based on the operating system
+if [[ $OS == "Darwin" ]]; then
+  # This is a Mac
+  for package in "${packages_to_install[@]}"; do
+    brew install $package
+  done
+elif [[ $OS == "Linux" ]]; then
+  # This is Linux
+  DISTRO="$(awk -F= '/^NAME/{print $2}' /etc/os-release)"
+  if [[ $DISTRO == *"Ubuntu"* ]]; then
+    sudo apt-get update
+    sudo apt-get install -y "${packages_to_install[@]}"
+  elif [[ $DISTRO == *"Fedora"* ]]; then
+    sudo dnf install -y "${packages_to_install[@]}"
+  elif [[ $DISTRO == *"Arch"* ]]; then
+    sudo pacman -Syu "${packages_to_install[@]}"
+  else
+    echo "Unsupported distribution install the following packages manually"
+    echo "${packages_to_install[@]}"
+    exit
+  fi
 else
-  echo "Unsupported distribution install the following packages manually"
-  echo "${packages_to_install[@]}"
+  echo "Unsupported operating system. This script works on Mac and Linux only."
   exit
 fi
 
