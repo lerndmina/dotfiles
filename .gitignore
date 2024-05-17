@@ -6,3 +6,4 @@ Scripts/api_key
 .ssh/known_hosts
 .wget-hsts
 .directory
+.DS_Store
