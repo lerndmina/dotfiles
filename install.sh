@@ -76,7 +76,6 @@ fi
 
 # Check if fastfetch is installed
 if ! command -v fastfetch &>/dev/null; then
-  sudo add-apt-repository ppa:zhangsongcui3371/fastfetch
   echo "fastfetch could not be found, adding to install list"
   packages_to_install+=("fastfetch")
 fi
@@ -98,6 +97,7 @@ OS="$(awk -F= '/^NAME/{print $2}' /etc/os-release)"
 
 # Install packages based on the distribution
 if [[ $OS == *"Ubuntu"* ]]; then
+  sudo add-apt-repository ppa:zhangsongcui3371/fastfetch
   sudo apt-get update
   sudo apt-get install -y "${packages_to_install[@]}"
 elif [[ $OS == *"Fedora"* ]]; then
