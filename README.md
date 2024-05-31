@@ -10,6 +10,10 @@ This repository contains my personal dotfiles. They are managed using [GNU Stow]
 
 ```bash
 wget https://raw.githubusercontent.com/lerndmina/dotfiles/master/install.sh
+```
+```bash
 chmod +x install.sh
+```
+```bash
 ./install.sh
 ```
