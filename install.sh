@@ -32,6 +32,14 @@ function cloneAndStow() {
   stow --adopt .
   git restore .
 
+  # Ask if you want to run $HOME/Scripts/initial-server-setup.sh
+  read -p "Do you want to run $HOME/Scripts/initial-server-setup.sh? (y/n) " -n 1 -r
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    $HOME/Scripts/initial-server-setup.sh
+  else
+    echo "Skipping initial server setup"
+  fi
+
   exit
 }
 
