@@ -35,6 +35,7 @@ function cloneAndStow() {
   # Ask if you want to run $HOME/Scripts/initial-server-setup.sh
   read -p "Do you want to run $HOME/Scripts/initial-server-setup.sh? (y/n) " -n 1 -r
   if [[ $REPLY =~ ^[Yy]$ ]]; then
+    chmod +x $HOME/Scripts/initial-server-setup.sh
     $HOME/Scripts/initial-server-setup.sh
   else
     echo "Skipping initial server setup"
