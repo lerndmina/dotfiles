@@ -1,3 +1,4 @@
+#!/bin/bash
 if [ "$(uname)" == "Darwin" ]; then
   # Check internet access
   if ! ping -c 1 google.com >/dev/null; then
