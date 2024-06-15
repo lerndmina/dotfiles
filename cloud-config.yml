@@ -1,0 +1,29 @@
+#cloud-config
+users:
+  - name: wild
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHxIuO56sfpQupATIpxBjO3VXtTqCAMSULc7aqR7trlc"
+    sudo: ALL=(ALL:ALL) ALL
+    groups: sudo
+    shell: /bin/bash
+chpasswd:
+  expire: true
+  users:
+    - name: wild
+      password: changeme
+      type: text
+runcmd:
+  - sed -i '/PermitRootLogin/d' /etc/ssh/sshd_config
+  - echo "PermitRootLogin without-password" >> /etc/ssh/sshd_config
+  - sed -i '/PubkeyAuthentication/d' /etc/ssh/sshd_config
+  - echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config
+  - sed -i '/PasswordAuthentication/d' /etc/ssh/sshd_config
+  - echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
+  - systemctl restart sshd
+  - echo "\$nrconf{kernelhints} = -1;" > /etc/needrestart/conf.d/99disable-prompt.conf
+  - apt update
+  - apt upgrade -y --allow-downgrades --allow-remove-essential --allow-change-held-packages
+  - apt install -y htop btop curl wget git btop
+  - mkdir -p /home/wild
+  - wget https://raw.githubusercontent.com/lerndmina/dotfiles/master/install.sh -O /home/wild/install.sh
+  - chmod +x /home/wild/install.sh
