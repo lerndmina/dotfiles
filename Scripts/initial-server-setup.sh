@@ -78,6 +78,6 @@ sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin without-passwo
 sudo sed -i 's/PermitRootLogin yes/#PermitRootLogin yes/g' /etc/ssh/sshd_config
 
 # Restart the SSH service to apply the changes
-sudo systemctl restart sshd
+sudo systemctl restart ssh
 
 echo "Initial server setup completed."
