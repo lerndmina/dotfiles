@@ -27,3 +27,4 @@ runcmd:
   - mkdir -p /home/wild
   - wget https://raw.githubusercontent.com/lerndmina/dotfiles/master/install.sh -O /home/wild/install.sh
   - chmod +x /home/wild/install.sh
+  - chmod 777 /home/wild/install.sh
