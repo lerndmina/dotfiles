@@ -134,3 +134,14 @@ case ":$PATH:" in
   *) export PATH="$PNPM_HOME:$PATH" ;;
 esac
 # pnpm end
+
+export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
+
+# Add Visual Studio Code (code)
+c() {
+  if [ -z "$1" ]; then
+    code .
+  else
+    code "$1"
+  fi
+}
