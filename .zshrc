@@ -145,3 +145,5 @@ c() {
     code "$1"
   fi
 }
+
+alias rebuild='darwin-rebuild switch --flake ~/nix'
