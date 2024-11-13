@@ -147,3 +147,4 @@ c() {
 }
 
 alias rebuild='darwin-rebuild switch --flake ~/nix'
+eval "$(/opt/homebrew/bin/brew shellenv)"
