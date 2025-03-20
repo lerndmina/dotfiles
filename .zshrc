@@ -1,3 +1,4 @@
+eval "$(/opt/homebrew/bin/brew shellenv)"
 fastfetch
 
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
@@ -147,4 +148,3 @@ c() {
 }
 
 alias rebuild='darwin-rebuild switch --flake ~/nix'
-eval "$(/opt/homebrew/bin/brew shellenv)"
