@@ -1,8 +1,7 @@
 #!/bin/bash
 TO_INSTALL=""
-
+REBOOT_NEEDED=false
 UNABLE=false
-
 LOCKFILE="/tmp/screenshot.lock"
 
 # Check if the script is already running or has been locked
@@ -12,45 +11,48 @@ else
   touch $LOCKFILE
 fi
 
-# Check if flameshot is installed
-if ! command -v flameshot &>/dev/null; then
-  echo "flameshot could not be found, installing..."
-  TO_INSTALL="$TO_INSTALL flameshot"
+# Detect OS type (Bazzite/SteamOS vs regular distro)
+IS_BAZZITE=false
+if [ -f /etc/os-release ]; then
+  . /etc/os-release
+  if [[ "$NAME" == *"Bazzite"* ]] || [[ "$NAME" == *"SteamOS"* ]]; then
+    IS_BAZZITE=true
+    echo "Detected Bazzite/SteamOS environment"
+  fi
 fi
 
-# Check if curl is installed
-if ! command -v curl &>/dev/null; then
-  echo "curl could not be found, installing..."
-  TO_INSTALL="$TO_INSTALL curl"
-fi
+# Check for required tools
+check_package() {
+  local cmd=$1
+  local pkg=$2
+  if ! command -v $cmd &>/dev/null; then
+    echo "$cmd could not be found, will install $pkg..."
+    TO_INSTALL="$TO_INSTALL $pkg"
+  fi
+}
 
-# Check if jq is installed
-if ! command -v jq &>/dev/null; then
-  echo "jq could not be found, installing..."
-  TO_INSTALL="$TO_INSTALL jq"
-fi
+# Check for required packages
+check_package flameshot flameshot
+check_package curl curl
+check_package jq jq
+check_package xsel xsel
+check_package paplay pulseaudio-utils
+check_package zenity zenity
 
-# Check if xsel is installed
-if ! command -v xsel &>/dev/null; then
-  echo "xsel could not be found, installing..."
-  TO_INSTALL="$TO_INSTALL xsel"
-fi
-
-# Check if paplay is installed
-if ! command -v paplay &>/dev/null; then
-  echo "paplay could not be found, installing..."
-  TO_INSTALL="$TO_INSTALL pulseaudio-utils"
-fi
-
-# Check if zenity is installed
-if ! command -v zenity &>/dev/null; then
-  echo "zenity could not be found, installing..."
-  TO_INSTALL="$TO_INSTALL zenity"
-fi
-
-# Install missing packages
+# Install missing packages based on detected OS
 if [ ! -z "$TO_INSTALL" ]; then
-  sudo apt install -y $TO_INSTALL
+  if $IS_BAZZITE; then
+    echo "Installing packages with rpm-ostree on Bazzite/SteamOS..."
+    sudo rpm-ostree install $TO_INSTALL
+    REBOOT_NEEDED=true
+  else
+    echo "Installing packages with apt..."
+    sudo apt install -y $TO_INSTALL
+  fi
+
+  if $REBOOT_NEEDED; then
+    zenity --info --title="Reboot Required" --text="Packages have been installed, but you need to reboot your system for the changes to take effect.\n\nPlease reboot when convenient."
+  fi
 fi
 
 APIKEY_FILE="$HOME/Scripts/api_key"
@@ -68,9 +70,7 @@ while true; do
     echo "$api_key" >$APIKEY_FILE
     zenity --info --text "API key saved to $APIKEY_FILE"
   else
-    echo "DEBUG API key found in $APIKEY_FILE"
     api_key=$(cat $APIKEY_FILE)
-    echo "API key: $api_key"
   fi
 
   # Check if API key is valid
