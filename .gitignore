@@ -7,3 +7,4 @@ Scripts/api_key
 .wget-hsts
 .directory
 .DS_Store
+oracle-backup.conf
