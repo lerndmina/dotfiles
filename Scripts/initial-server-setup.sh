@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Check if the system is running Ubuntu
-if grep -q 'Ubuntu' /etc/os-release; then
+# Check if the system is running Ubuntu or Debian
+if grep -qE 'Ubuntu|Debian' /etc/os-release; then
   # Update the package list
   sudo apt-get update
 
