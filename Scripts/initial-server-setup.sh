@@ -53,15 +53,13 @@ if grep -qE 'Ubuntu|Debian' /etc/os-release; then
     sudo sed -i 's/maxretry = 5/maxretry = 3/g' /etc/fail2ban/jail.local
     sudo sed -i 's/bantime  = 10m/bantime  = 10m/g' /etc/fail2ban/jail.local
 
+    # Disable needrestart prompt
+    sudo mkdir -p /etc/needrestart/conf.d/
+    echo "\$nrconf{kernelhints} = -1;" | sudo tee /etc/needrestart/conf.d/99disable-prompt.conf > /dev/null
+
     # Start and enable fail2ban
     sudo systemctl start fail2ban
     sudo systemctl enable fail2ban
-
-    # Disable needrestart prompt
-    echo "\$nrconf{kernelhints} = -1;" > /etc/needrestart/conf.d/99disable-prompt.conf
-
-    sudo systemctl enable fail2ban
-    sudo systemctl start fail2ban
   fi
 fi
 
