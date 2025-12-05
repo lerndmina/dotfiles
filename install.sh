@@ -122,20 +122,22 @@ elif [[ $OS == "Linux" ]]; then
     sudo apt-get install -y "${packages_to_install[@]}"
   elif [[ $DISTRO == *"Debian"* ]]; then
     sudo apt-get update
-    # Install packages except fastfetch first
-    other_packages=()
-    for package in "${packages_to_install[@]}"; do
-      if [[ $package != "fastfetch" ]]; then
-        other_packages+=("$package")
-      fi
-    done
-    if [ ${#other_packages[@]} -gt 0 ]; then
-      sudo apt-get install -y "${other_packages[@]}"
-    fi
-    # Try to install fastfetch if it was in the list
-    if [[ " ${packages_to_install[*]} " =~ " fastfetch " ]]; then
-      if ! sudo apt-get install -y fastfetch 2>/dev/null; then
-        echo "fastfetch is not available in the Debian repositories."
+    # Try to install all packages - fastfetch may not be available in older Debian repos
+    if ! sudo apt-get install -y "${packages_to_install[@]}"; then
+      # If installation failed and fastfetch was in the list, try without it
+      if [[ " ${packages_to_install[*]} " =~ " fastfetch " ]]; then
+        echo "Some packages failed to install, retrying without fastfetch..."
+        other_packages=()
+        for package in "${packages_to_install[@]}"; do
+          if [[ $package != "fastfetch" ]]; then
+            other_packages+=("$package")
+          fi
+        done
+        if [ ${#other_packages[@]} -gt 0 ]; then
+          sudo apt-get install -y "${other_packages[@]}"
+        fi
+        echo ""
+        echo "Note: fastfetch is not available in your Debian repositories."
         echo "You can install it manually from: https://github.com/fastfetch-cli/fastfetch/releases"
       fi
     fi
