@@ -114,9 +114,31 @@ elif [[ $OS == "Linux" ]]; then
   # This is Linux
   DISTRO="$(awk -F= '/^NAME/{print $2}' /etc/os-release)"
   if [[ $DISTRO == *"Ubuntu"* ]]; then
-    sudo add-apt-repository ppa:zhangsongcui3371/fastfetch
+    # Only add PPA for fastfetch on Ubuntu if fastfetch is in the install list
+    if [[ " ${packages_to_install[*]} " =~ " fastfetch " ]]; then
+      sudo add-apt-repository -y ppa:zhangsongcui3371/fastfetch
+    fi
     sudo apt-get update
     sudo apt-get install -y "${packages_to_install[@]}"
+  elif [[ $DISTRO == *"Debian"* ]]; then
+    sudo apt-get update
+    # Install packages except fastfetch first
+    other_packages=()
+    for package in "${packages_to_install[@]}"; do
+      if [[ $package != "fastfetch" ]]; then
+        other_packages+=("$package")
+      fi
+    done
+    if [ ${#other_packages[@]} -gt 0 ]; then
+      sudo apt-get install -y "${other_packages[@]}"
+    fi
+    # Try to install fastfetch if it was in the list
+    if [[ " ${packages_to_install[*]} " =~ " fastfetch " ]]; then
+      if ! sudo apt-get install -y fastfetch 2>/dev/null; then
+        echo "fastfetch is not available in the Debian repositories."
+        echo "You can install it manually from: https://github.com/fastfetch-cli/fastfetch/releases"
+      fi
+    fi
   elif [[ $DISTRO == *"Fedora"* ]]; then
     sudo dnf install -y "${packages_to_install[@]}"
   elif [[ $DISTRO == *"Arch"* ]]; then
