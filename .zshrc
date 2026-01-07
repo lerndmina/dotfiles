@@ -148,3 +148,6 @@ c() {
 }
 
 alias rebuild='darwin-rebuild switch --flake ~/nix'
+export EDITOR=msedit
+export N_PREFIX="$HOME/.n"
+export PATH="$N_PREFIX/bin:$PATH"

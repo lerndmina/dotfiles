@@ -1,0 +1,3 @@
+[settings]
+api_url = https://wakapi.flythe.cloud/api
+api_key = ${WAKATIME_API_KEY}

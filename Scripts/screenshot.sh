@@ -42,10 +42,17 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 SCREENSHOT_FILE="/tmp/screenshot_${TIMESTAMP}.png"
 
 # Launch flameshot with correct options
-flameshot gui -r >"$SCREENSHOT_FILE"
+# flameshot gui -r >"$SCREENSHOT_FILE"
+spectacle -r -c -b -o "$SCREENSHOT_FILE"
 if [ ! -s "$SCREENSHOT_FILE" ]; then
   echo "Error: Screenshot was not taken or is empty"
   exit 1
+fi
+
+# Copy screenshot file to clipboard
+xclip -selection clipboard -t image/png -i "$SCREENSHOT_FILE"
+if [ $? -ne 0 ]; then
+  echo "Warning: Could not copy screenshot to clipboard"
 fi
 
 # Start timing the upload

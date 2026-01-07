@@ -32,6 +32,18 @@ function cloneAndStow() {
   stow --adopt .
   git restore .
 
+  # Generate wakatime config from template
+  if [ -z "$WAKATIME_API_KEY" ]; then
+    read -p "Enter your WakaTime API key (leave empty to skip): " WAKATIME_API_KEY
+  fi
+  if [ -n "$WAKATIME_API_KEY" ]; then
+    export WAKATIME_API_KEY
+    envsubst < $HOME/.wakatime.cfg.template > $HOME/.wakatime.cfg
+    echo "Generated .wakatime.cfg from template"
+  else
+    echo "Skipping wakatime config generation"
+  fi
+
   # Ask if you want to run $HOME/Scripts/initial-server-setup.sh
   read -p "Do you want to run $HOME/Scripts/initial-server-setup.sh? (y/n) " -n 1 -r
   if [[ $REPLY =~ ^[Yy]$ ]]; then
