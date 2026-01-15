@@ -151,3 +151,33 @@ alias rebuild='darwin-rebuild switch --flake ~/nix'
 export EDITOR=msedit
 export N_PREFIX="$HOME/.n"
 export PATH="$N_PREFIX/bin:$PATH"
+# Auto-activate Python virtual environments (venv/.venv)
+# Tracks which venvs were auto-activated to avoid deactivating manually activated ones
+typeset -g _AUTO_VENV_PATH=""
+
+function python_venv_auto_activate() {
+  local venv_path=""
+  
+  # Check for venv in current directory
+  if [[ -f "venv/bin/activate" ]]; then
+    venv_path="$(pwd)/venv"
+  elif [[ -f ".venv/bin/activate" ]]; then
+    venv_path="$(pwd)/.venv"
+  fi
+  
+  # If we found a venv, activate it (if not already active)
+  if [[ -n "$venv_path" ]]; then
+    if [[ "$VIRTUAL_ENV" != "$venv_path" ]]; then
+      source "$venv_path/bin/activate"
+      _AUTO_VENV_PATH="$venv_path"
+    fi
+  # Only auto-deactivate if we auto-activated it (not manually activated)
+  elif [[ -n "$VIRTUAL_ENV" && "$VIRTUAL_ENV" == "$_AUTO_VENV_PATH" ]]; then
+    deactivate
+    _AUTO_VENV_PATH=""
+  fi
+}
+
+autoload -U add-zsh-hook
+add-zsh-hook chpwd python_venv_auto_activate
+python_venv_auto_activate
