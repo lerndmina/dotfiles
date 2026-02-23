@@ -31,28 +31,58 @@ STARTUP_TIME=$(echo "$STARTUP_END_TIME - $SCRIPT_START_TIME" | bc)
 STARTUP_TIME_MS=$(echo "$STARTUP_TIME * 1000" | bc | cut -d'.' -f1)
 echo "Startup completed in ${STARTUP_TIME_MS}ms"
 
-# Check if we're running under Wayland and force X11 backend if needed
-if [ "$XDG_SESSION_TYPE" = "wayland" ] || [ -n "$WAYLAND_DISPLAY" ]; then
-  echo "Wayland detected, forcing XCB platform for Flameshot"
-  export QT_QPA_PLATFORM=xcb
-fi
-
 # Create a temporary file for the screenshot with a timestamp
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 SCREENSHOT_FILE="/tmp/screenshot_${TIMESTAMP}.png"
 
-# Launch flameshot with correct options
-# flameshot gui -r >"$SCREENSHOT_FILE"
-spectacle -r -c -b -o "$SCREENSHOT_FILE"
+SCREENSHOT_FROM_CLIPBOARD=false
+
+take_screenshot() {
+  case "$SCREENSHOT_TOOL" in
+    flameshot)
+      if [ "$XDG_SESSION_TYPE" = "wayland" ] || [ -n "$WAYLAND_DISPLAY" ]; then
+        echo "Wayland detected, running flameshot with XCB platform"
+        QT_QPA_PLATFORM=xcb flameshot gui -p "$SCREENSHOT_FILE"
+      else
+        flameshot gui -p "$SCREENSHOT_FILE"
+      fi
+      ;;
+    grim)
+      local geometry
+      geometry=$(slurp) || return 1  # return 1 if user cancels selection
+      grim -g "$geometry" "$SCREENSHOT_FILE"
+      ;;
+    spectacle)
+      spectacle -r -n -b -o "$SCREENSHOT_FILE"
+      # Spectacle may be configured to copy to clipboard rather than save a file.
+      # If so, read the image back out of the clipboard.
+      if [ ! -s "$SCREENSHOT_FILE" ]; then
+        echo "No output file from spectacle, checking clipboard for image..."
+        if wl-paste --list-types 2>/dev/null | grep -q "image/png"; then
+          wl-paste --type image/png > "$SCREENSHOT_FILE"
+          SCREENSHOT_FROM_CLIPBOARD=true
+        fi
+      fi
+      ;;
+    *)
+      echo "Error: Unknown screenshot tool '$SCREENSHOT_TOOL' (set in Scripts/setup.sh)"
+      return 1
+      ;;
+  esac
+}
+
+take_screenshot
 if [ ! -s "$SCREENSHOT_FILE" ]; then
   echo "Error: Screenshot was not taken or is empty"
   exit 1
 fi
 
-# Copy screenshot file to clipboard
-xclip -selection clipboard -t image/png -i "$SCREENSHOT_FILE"
-if [ $? -ne 0 ]; then
-  echo "Warning: Could not copy screenshot to clipboard"
+# Copy screenshot to clipboard (skip if spectacle already put it there)
+if ! $SCREENSHOT_FROM_CLIPBOARD; then
+  wl-copy < "$SCREENSHOT_FILE"
+  if [ $? -ne 0 ]; then
+    echo "Warning: Could not copy screenshot to clipboard"
+  fi
 fi
 
 # Start timing the upload

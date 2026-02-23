@@ -4,6 +4,10 @@ REBOOT_NEEDED=false
 UNABLE=false
 LOCKFILE="/tmp/screenshot.lock"
 
+# Screenshot tool to use. Options: flameshot, spectacle, grim
+# Note: grim requires wlr-screencopy (wlroots compositors only, not KDE/KWin)
+SCREENSHOT_TOOL="spectacle"
+
 # Check if the script is already running or has been locked
 if [ -f $LOCKFILE ]; then
   UNABLE=true
@@ -32,10 +36,15 @@ check_package() {
 }
 
 # Check for required packages
-check_package flameshot flameshot
+case "$SCREENSHOT_TOOL" in
+  flameshot)  check_package flameshot flameshot ;;
+  grim)       check_package grim grim; check_package slurp slurp ;;
+  spectacle)  check_package spectacle spectacle ;;
+esac
 check_package curl curl
 check_package jq jq
 check_package xsel xsel
+check_package wl-copy wl-clipboard
 check_package paplay pulseaudio-utils
 check_package zenity zenity
 
