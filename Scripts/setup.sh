@@ -65,6 +65,7 @@ if [ ! -z "$TO_INSTALL" ]; then
 fi
 
 APIKEY_FILE="$HOME/Scripts/api_key"
+UPLOAD_CONFIG_FILE="$HOME/Scripts/upload_config"
 BASE_URL="https://shrt.zip"
 
 while true; do
@@ -91,3 +92,62 @@ while true; do
     rm $APIKEY_FILE
   fi
 done
+
+setup_upload_config() {
+  # 1/4 — Filename format
+  format=$(zenity --list \
+    --title="Upload Setup (1/4) — Filename Format" \
+    --text="How should uploaded files be named?" \
+    --radiolist \
+    --column="" --column="Format" --column="Example" \
+    TRUE  "random" "Dh39ck.png" \
+    FALSE "date"   "2021-01-01.png" \
+    FALSE "uuid"   "b79c332b-306e-47ff-b564.png" \
+    FALSE "gfycat" "adventurous-adorable-gorilla.png" \
+    --width=460 --height=280 2>/dev/null) || format="random"
+  # zenity --list prints all selected columns; strip anything after the first field
+  format=$(echo "$format" | awk '{print $1}')
+
+  # 2/4 — Domain override
+  domain=$(zenity --entry \
+    --title="Upload Setup (2/4) — Domain Override" \
+    --text="Override the domain used in returned URLs (optional).\n\nLeave blank to use your Zipline server's default domain.\nComma-separate multiple values for random selection per upload.\n\nExample: i.example.com" \
+    2>/dev/null) || domain=""
+
+  # 3/4 — Folder ID
+  folder_id=$(zenity --entry \
+    --title="Upload Setup (3/4) — Folder" \
+    --text="Folder ID to file screenshots into (optional).\n\nLeave blank to upload without a folder.\nFind folder IDs in your Zipline dashboard under Folders." \
+    2>/dev/null) || folder_id=""
+
+  # 4/4 — Image compression
+  while true; do
+    compression=$(zenity --entry \
+      --title="Upload Setup (4/4) — Image Compression" \
+      --text="Compress uploaded images (optional).\n\nLeave blank to disable. Enter a percentage from 1–100." \
+      2>/dev/null) || { compression=""; break; }
+    if [ -z "$compression" ] || { [[ "$compression" =~ ^[0-9]+$ ]] && [ "$compression" -ge 1 ] && [ "$compression" -le 100 ]; }; then
+      break
+    fi
+    zenity --error --title="Invalid Input" \
+      --text="Please enter a whole number between 1 and 100, or leave blank to disable compression."
+  done
+
+  cat > "$UPLOAD_CONFIG_FILE" <<EOF
+UPLOAD_FORMAT="${format:-random}"
+UPLOAD_DOMAIN="$domain"
+UPLOAD_FOLDER_ID="$folder_id"
+UPLOAD_COMPRESSION="$compression"
+EOF
+
+  zenity --info \
+    --title="Upload Setup Complete" \
+    --text="Settings saved to $UPLOAD_CONFIG_FILE\n\nFormat:      ${format:-random}\nDomain:      ${domain:-(default)}\nFolder ID:   ${folder_id:-(none)}\nCompression: ${compression:-(disabled)}\n\nDelete this file to re-run setup." \
+    2>/dev/null
+}
+
+if [ ! -s "$UPLOAD_CONFIG_FILE" ]; then
+  setup_upload_config
+fi
+
+source "$UPLOAD_CONFIG_FILE"

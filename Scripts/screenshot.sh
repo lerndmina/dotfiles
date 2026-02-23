@@ -89,8 +89,18 @@ fi
 UPLOAD_START_TIME=$(date +%s.%N)
 echo "Uploading screenshot..."
 
+# Build upload headers from config (set by setup.sh)
+UPLOAD_HEADERS=(-H "x-zipline-format: ${UPLOAD_FORMAT:-random}")
+[ -n "$UPLOAD_DOMAIN" ]      && UPLOAD_HEADERS+=(-H "x-zipline-domain: $UPLOAD_DOMAIN")
+[ -n "$UPLOAD_FOLDER_ID" ]   && UPLOAD_HEADERS+=(-H "x-zipline-folder: $UPLOAD_FOLDER_ID")
+[ -n "$UPLOAD_COMPRESSION" ] && UPLOAD_HEADERS+=(-H "x-zipline-image-compression-percent: $UPLOAD_COMPRESSION")
+
 # Upload the screenshot and extract the URL
-response=$(curl -s -H "authorization: $api_key" $BASE_URL/api/upload -F "file=@$SCREENSHOT_FILE" -H "Content-Type: multipart/form-data" -H "Format: random" -H "Embed: true")
+response=$(curl -s \
+  -H "authorization: $api_key" \
+  "${UPLOAD_HEADERS[@]}" \
+  "$BASE_URL/api/upload" \
+  -F "file=@$SCREENSHOT_FILE")
 
 # Calculate upload time
 UPLOAD_END_TIME=$(date +%s.%N)
