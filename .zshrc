@@ -181,3 +181,6 @@ function python_venv_auto_activate() {
 autoload -U add-zsh-hook
 add-zsh-hook chpwd python_venv_auto_activate
 python_venv_auto_activate
+
+# opencode
+export PATH=/home/wild/.opencode/bin:$PATH
