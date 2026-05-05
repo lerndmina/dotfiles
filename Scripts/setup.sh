@@ -45,6 +45,7 @@ check_package curl curl
 check_package jq jq
 check_package xsel xsel
 check_package wl-copy wl-clipboard
+check_package python3 python3
 check_package paplay pulseaudio-utils
 check_package zenity zenity
 
@@ -104,7 +105,7 @@ setup_upload_config() {
     FALSE "date"   "2021-01-01.png" \
     FALSE "uuid"   "b79c332b-306e-47ff-b564.png" \
     FALSE "gfycat" "adventurous-adorable-gorilla.png" \
-    --width=460 --height=280 2>/dev/null) || format="random"
+    --width=460 --height=400 2>/dev/null) || format="random"
   # zenity --list prints all selected columns; strip anything after the first field
   format=$(echo "$format" | awk '{print $1}')
 
