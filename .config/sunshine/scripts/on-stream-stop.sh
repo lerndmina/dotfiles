@@ -59,8 +59,8 @@ if [[ -n "$ENABLE_CMDS" ]]; then
     sleep 0.3
 fi
 
-# Set positions for enabled monitors, keep DP-3 at far left
-log "Setting positions"
-kscreen-doctor output.DP-3.position.0,340 $POSITION_CMDS 2>> "$LOG_FILE"
+# Ensure DP-3 stays enabled and set positions
+log "Setting positions (ensuring DP-3 stays enabled)"
+kscreen-doctor output.DP-3.enable output.DP-3.position.0,340 $POSITION_CMDS 2>> "$LOG_FILE"
 
 log "Restored physical displays"
