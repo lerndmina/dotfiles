@@ -48,5 +48,21 @@ if [ "$(uname)" == "Darwin" ]; then
   fi
 
 else
-  sh -c "$(curl -sS https://raw.githubusercontent.com/Vendicated/VencordInstaller/main/install.sh)"
+  DISCORD_DIR=$(ls -d "$HOME/.config/discord/app-"* 2>/dev/null | sort -V | tail -1)
+  if [ -z "$DISCORD_DIR" ]; then
+    echo "Could not find Discord installation in $HOME/.config/discord/"
+    exit 1
+  fi
+
+  outfile=$(mktemp)
+  trap 'rm -f "$outfile"' EXIT
+
+  echo "Downloading Installer..."
+  curl -sS https://github.com/Vendicated/VencordInstaller/releases/latest/download/VencordInstallerCli-Linux \
+    -o "$outfile" -L --fail
+  chmod +x "$outfile"
+
+  echo "Installing to $DISCORD_DIR"
+  sudo "$outfile" -install -location "$DISCORD_DIR"
+  sudo "$outfile" -install-openasar -location "$DISCORD_DIR"
 fi
