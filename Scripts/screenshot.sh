@@ -209,7 +209,7 @@ take_screenshot() {
       grim -g "$geometry" "$CAPTURE_FILE"
       ;;
     spectacle)
-      spectacle -r -n -b -o "$CAPTURE_FILE"
+      spectacle -r -n -b -i -o "$CAPTURE_FILE"
       if [ ! -s "$CAPTURE_FILE" ]; then
         echo "No output file from spectacle, checking clipboard for image..."
         if wl-paste --list-types 2>/dev/null | grep -q "image/png"; then

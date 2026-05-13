@@ -63,6 +63,12 @@ else
   chmod +x "$outfile"
 
   echo "Installing to $DISCORD_DIR"
-  sudo "$outfile" -install -location "$DISCORD_DIR"
-  sudo "$outfile" -install-openasar -location "$DISCORD_DIR"
+  # ParseDiscord requires resources/app to exist; Electron must not find it after patching
+  run_installer() {
+    mkdir -p "$DISCORD_DIR/resources/app"
+    "$outfile" "$@" -location "$DISCORD_DIR"
+    rmdir "$DISCORD_DIR/resources/app" 2>/dev/null || true
+  }
+  run_installer -install
+  run_installer -install-openasar
 fi
