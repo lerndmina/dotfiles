@@ -2,9 +2,11 @@
 # Steam launch wrapper for PlanetSide 2 + Recursion Stat Tracker.
 #
 # Strategy: launch PS2 normally; in parallel, wait for PS2's wineserver
-# to come up, then launch RTST.exe inside the *same* Proton container
-# (same wine version, same prefix, same Steam Linux Runtime). They share
-# a wineserver, which is required for RTST's D3D overlay to hook PS2.
+# to come up (LaunchPad.exe), then launch RTST.exe inside the *same*
+# Proton container (same wine version, same prefix, same Steam Linux
+# Runtime). They share a wineserver, which is required for RTST's D3D
+# overlay to hook PS2. RTST must be running before PlanetSide2.exe
+# starts so its overlay can hook cleanly (matches Windows behavior).
 #
 # Set as PS2 launch option:
 #   /home/wild/bin/ps2-with-rtst.sh %command%
@@ -15,15 +17,17 @@ PROTON="/usr/share/steam/compatibilitytools.d/proton-cachyos-slr/proton"
 RTST_WIN='C:\Program Files (x86)\Recursion\RecursionTracker\RTST.exe'
 
 (
-    # Wait for PS2's launcher / game to be running so wineserver exists.
-    for _ in $(seq 1 120); do
-        if pgrep -fi 'LaunchPad\.exe|PlanetSide2\.exe' >/dev/null; then
+    # Wait for the LaunchPad (PS2's wineserver host) to appear, then a
+    # short delay so the prefix is fully up. Launch RTST *before*
+    # PlanetSide2.exe so the overlay is already resident when the game
+    # initializes its display.
+    for _ in $(seq 1 600); do
+        if pgrep -fi 'LaunchPad\.exe' >/dev/null; then
             break
         fi
         sleep 1
     done
-    # Give wine a moment to fully initialise the prefix.
-    sleep 6
+    sleep 3
 
     # Skip if RTST already running (e.g. relaunch within same session).
     if pgrep -fi 'RTST\.exe' >/dev/null; then
