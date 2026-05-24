@@ -18,6 +18,7 @@ _darcs
 ^/README.*
 ^/LICENSE.*
 ^/COPYING
+^/system     # reference copies of root-owned files (/etc/...); not symlinked into $HOME
 .gitconfig
 .directory
 .wget-hsts

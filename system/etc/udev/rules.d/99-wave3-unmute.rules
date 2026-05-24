@@ -1,0 +1,19 @@
+# REFERENCE COPY — not stowed (lives under system/, ignored by stow).
+# This file belongs in /etc (root-owned), which stow can't manage into $HOME.
+# Install on a fresh machine with:
+#   sudo cp system/etc/udev/rules.d/99-wave3-unmute.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger -s sound -c add
+#
+# Elgato Wave:3 (0fd9:0070) — force the ALSA capture switch on at enumeration.
+#
+# Tapping the hardware mute button while the device is still enumerating (e.g.
+# during boot) races the kernel against the device firmware: the firmware/LED
+# ends up "unmuted" while the ALSA Mic capture switch stays "off", so the mic
+# appears unmuted everywhere but transmits digital silence. There is no separate
+# userspace signal for the desync, so we reset to a known-good state (capture on)
+# whenever the card's control device appears (boot + every replug).
+#
+# Trade-off: if you intend to boot muted, tap mute AFTER the desktop is up rather
+# than during the boot race — by then enumeration is done and the toggle sticks.
+ACTION=="add", SUBSYSTEM=="sound", KERNEL=="controlC*", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="0070", RUN+="/usr/bin/amixer -c Wave3 set Mic cap"
