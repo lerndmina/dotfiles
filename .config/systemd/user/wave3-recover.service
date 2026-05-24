@@ -1,0 +1,17 @@
+[Unit]
+Description=Elgato Wave 3 auto-recovery after hardware mute
+After=wireplumber.service
+# Deliberately NOT PartOf=/BindsTo= wireplumber.service: this service restarts
+# wireplumber, so tying its lifecycle to wireplumber would SIGTERM it mid-recovery
+# (the cause of the May 2026 restart storm). It must outlive wireplumber restarts.
+# StartLimitIntervalSec=0 disables the start-limit latch so a transient failure
+# can't wedge the service into a state that needs a manual `reset-failed`.
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=%h/.local/bin/wave3-recover.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
