@@ -5,12 +5,18 @@ SCRIPT_START_TIME=$(date +%s.%N)
 source "$HOME/Scripts/setup.sh"
 
 MODE="screenshot"
-case "${1:-}" in
-  --record|-r|record)
-    MODE="record"
-    shift
-    ;;
-esac
+AUDIO_ENABLED=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --record|-r|record)
+      MODE="record"
+      ;;
+    --audio|-a|audio)
+      AUDIO_ENABLED=true
+      ;;
+  esac
+  shift
+done
 
 CAPTURE_FILE=""
 TEMP_CHUNK_DIR=""
@@ -225,17 +231,95 @@ take_screenshot() {
   esac
 }
 
+# Audio sources mixed onto a single track, used only when --audio is passed.
+# gsr merges devices joined by '|'. "default_output" = system audio,
+# "default_input" = default mic (the DeepFilter denoised source on this machine).
+RECORD_AUDIO="default_output|default_input"
+
 take_recording() {
-  case "$SCREENSHOT_TOOL" in
-    spectacle)
-      echo "Starting Spectacle recording. Finish the recording from Spectacle when you're done..."
-      spectacle -n -b -R r -o "$CAPTURE_FILE"
-      ;;
-    *)
-      echo "Error: Recording mode currently requires SCREENSHOT_TOOL='spectacle'"
+  # Spectacle's KPipeWire recorder rejects odd-width regions ("no more input
+  # formats") and silently produces nothing, so recording uses gpu-screen-recorder
+  # with an explicit, even-rounded region instead.
+  local tool
+  for tool in gpu-screen-recorder slurp notify-send; do
+    command -v "$tool" >/dev/null 2>&1 || {
+      echo "Error: '$tool' is required for recording but was not found"
       return 1
-      ;;
-  esac
+    }
+  done
+
+  # Interactive region select, then round W/H DOWN to even (encoders need even dims)
+  local geo w h x y
+  geo=$(slurp -f '%w %h %x %y') || {
+    echo "Region selection cancelled"
+    return 1
+  }
+  read -r w h x y <<<"$geo"
+  w=$((w - w % 2))
+  h=$((h - h % 2))
+  if [ "$w" -lt 2 ] || [ "$h" -lt 2 ]; then
+    echo "Error: selected region is too small"
+    return 1
+  fi
+  local region="${w}x${h}+${x}+${y}"
+  echo "Recording region ${region} (rounded to even). Click the tray icon to stop."
+
+  # Audio is opt-in via --audio; otherwise record silently. When enabled, mix
+  # system audio + mic onto one Opus track.
+  local audio_args=()
+  if $AUDIO_ENABLED; then
+    audio_args=(-ac opus -a "$RECORD_AUDIO")
+    echo "Audio capture enabled (system + mic)."
+  else
+    echo "Audio capture disabled (pass --audio to enable)."
+  fi
+
+  # Start the recorder: webm (AV1 video, GPU-encoded — no second ffmpeg pass
+  # needed), cursor on.
+  gpu-screen-recorder \
+    -w "$region" \
+    -c webm -k av1 \
+    -f 60 -cursor yes -cr limited \
+    -bm vbr -q very_high \
+    "${audio_args[@]}" \
+    -encoder gpu \
+    -o "$CAPTURE_FILE" &
+  local rec_pid=$!
+
+  # --- Recording indicator + stop control ---
+  # Tray dot: a red SNI icon (the only tray kind Plasma 6 renders) drawn by a
+  # small PySide6 helper. Clicking the dot or its "Stop" menu item sends SIGINT
+  # to gsr, which finalizes the file. Optional — if PySide6 is missing we just
+  # rely on the notification below. The helper exits on its own if gsr dies.
+  local tray_pid=""
+  if python3 -c 'import PySide6.QtWidgets' >/dev/null 2>&1; then
+    python3 "$HOME/Scripts/record-tray.py" "$rec_pid" "$region" >/dev/null 2>&1 &
+    tray_pid=$!
+  fi
+
+  # Notification indicator (persistent, bypasses Do Not Disturb). Captures the
+  # notification id so we can close it once recording stops.
+  local notif_id=""
+  notif_id=$(notify-send -p -i media-record -u critical -t 0 \
+    -h "string:x-canonical-private-synchronous:gsr-recording" \
+    "● Recording in progress" \
+    "Click the red tray dot ⏺ to stop & upload (region ${region})." 2>/dev/null)
+
+  # Wait until the recorder finishes — stopped via the tray dot, or it exits on
+  # its own. (If the tray helper is unavailable, stop gsr from a terminal with
+  # Ctrl-C / `kill -INT`.)
+  wait "$rec_pid"
+  local rc=$?
+
+  # Tear down the indicators.
+  [ -n "$tray_pid" ] && kill "$tray_pid" 2>/dev/null
+  [ -n "$notif_id" ] && qdbus6 org.freedesktop.Notifications /org/freedesktop/Notifications \
+    org.freedesktop.Notifications.CloseNotification "$notif_id" >/dev/null 2>&1
+
+  if [ ! -s "$CAPTURE_FILE" ]; then
+    echo "Error: recorder exited (code $rc) without producing a file"
+    return 1
+  fi
 }
 
 extract_url_from_response() {

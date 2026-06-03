@@ -8,3 +8,4 @@ Scripts/api_key
 .directory
 .DS_Store
 oracle-backup.conf
+Scripts/__pycache__/
