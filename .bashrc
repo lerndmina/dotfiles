@@ -116,7 +116,7 @@ if ! shopt -oq posix; then
   fi
 fi
 
-PATH=~/.console-ninja/.bin:$PATH
+
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH=$BUN_INSTALL/bin:$PATH

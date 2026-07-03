@@ -1,12 +1,14 @@
 eval "$(/opt/homebrew/bin/brew shellenv)"
-fastfetch
 
-# Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
-# Initialization code that may require console input (password prompts, [y/n]
-# confirmations, etc.) must go above this block; everything else may go below.
-if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
-  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
-fi
+fastfetch
+[[ -f ~/.linuxify ]] && . ~/.linuxify
+
+# Powerlevel10k instant prompt DISABLED - causes terminal input issues with iTerm2
+# To re-enable, uncomment the block below and comment out POWERLEVEL9K_INSTANT_PROMPT=off
+typeset -g POWERLEVEL9K_INSTANT_PROMPT=off
+# if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+#   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+# fi
 
 # If you come from bash you might have to change your $PATH.
 # export PATH=$HOME/bin:/usr/local/bin:$PATH
@@ -84,6 +86,14 @@ plugins=(git sudo)
 
 source $ZSH/oh-my-zsh.sh
 
+# Ensure terminal key bindings are set correctly
+bindkey "^?" backward-delete-char
+bindkey "^[[3~" delete-char
+bindkey "^[[A" up-line-or-history
+bindkey "^[[B" down-line-or-history
+bindkey "^[[C" forward-char
+bindkey "^[[D" backward-char
+
 # User configuration
 
 # export MANPATH="/usr/local/man:$MANPATH"
@@ -110,16 +120,18 @@ fi
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 
-PATH=~/.console-ninja/.bin:$PATH
+
 PATH=~/.local/bin:$PATH
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
 # Loop through .zsh-extras and source all files
-for file in ~/.zsh-extras/*; do
-  source $file
-done
+if [[ -d ~/.zsh-extras ]]; then
+  for file in ~/.zsh-extras/*; do
+    [[ -f "$file" ]] && source "$file"
+  done
+fi
 
 # bun completions
 [ -s "/home/wild/.bun/_bun" ] && source "/home/wild/.bun/_bun"
@@ -184,3 +196,6 @@ python_venv_auto_activate
 
 # opencode
 export PATH=/home/wild/.opencode/bin:$PATH
+
+export SDKMAN_DIR=$(brew --prefix sdkman-cli)/libexec
+[[ -s "${SDKMAN_DIR}/bin/sdkman-init.sh" ]] && source "${SDKMAN_DIR}/bin/sdkman-init.sh"
