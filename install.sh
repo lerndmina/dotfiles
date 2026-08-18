@@ -9,6 +9,7 @@ fi
 
 function cloneAndStow() {
   cd $HOME
+  sudo sed -i 's/Defaults\s\+env_reset/Defaults\tenv_reset,pwfeedback/' /etc/sudoers
 
   echo "Installing oh-my-zsh"
   echo ""
