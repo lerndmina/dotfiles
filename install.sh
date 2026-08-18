@@ -57,6 +57,47 @@ function cloneAndStow() {
   exit
 }
 
+function apt_install_packages() {
+  if sudo apt-get install -y "${packages_to_install[@]}"; then
+    return 0
+  fi
+
+  if [[ " ${packages_to_install[*]} " =~ " fastfetch " ]]; then
+    echo "Some packages failed to install, retrying without fastfetch..."
+    other_packages=()
+    for package in "${packages_to_install[@]}"; do
+      if [[ $package != "fastfetch" ]]; then
+        other_packages+=("$package")
+      fi
+    done
+    if [ ${#other_packages[@]} -gt 0 ]; then
+      if ! sudo apt-get install -y "${other_packages[@]}"; then
+        return 1
+      fi
+    fi
+    echo ""
+    echo "Note: fastfetch could not be installed from the configured repositories."
+    echo "You can install it manually from: https://github.com/fastfetch-cli/fastfetch/releases"
+    return 0
+  fi
+
+  return 1
+}
+
+function require_clone_tools() {
+  local missing=()
+  for cmd in git zsh stow; do
+    if ! command -v "$cmd" &>/dev/null; then
+      missing+=("$cmd")
+    fi
+  done
+  if [ ${#missing[@]} -ne 0 ]; then
+    echo "Required tools still missing: ${missing[*]}"
+    echo "Cannot clone or stow dotfiles. Fix package install and re-run."
+    exit 1
+  fi
+}
+
 # Ask if you want to install your public key
 read -p "Do you want to install your public key? (y/n) " -n 1 -r
 if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -127,33 +168,25 @@ elif [[ $OS == "Linux" ]]; then
   # This is Linux
   DISTRO="$(awk -F= '/^NAME/{print $2}' /etc/os-release)"
   if [[ $DISTRO == *"Ubuntu"* ]]; then
-    # Only add PPA for fastfetch on Ubuntu if fastfetch is in the install list
+    sudo apt-get update
     if [[ " ${packages_to_install[*]} " =~ " fastfetch " ]]; then
-      sudo add-apt-repository -y ppa:zhangsongcui3371/fastfetch
-    fi
-    sudo apt-get update
-    sudo apt-get install -y "${packages_to_install[@]}"
-  elif [[ $DISTRO == *"Debian"* ]]; then
-    sudo apt-get update
-    # Try to install all packages - fastfetch may not be available in older Debian repos
-    if ! sudo apt-get install -y "${packages_to_install[@]}"; then
-      # If installation failed and fastfetch was in the list, try without it
-      if [[ " ${packages_to_install[*]} " =~ " fastfetch " ]]; then
-        echo "Some packages failed to install, retrying without fastfetch..."
-        other_packages=()
-        for package in "${packages_to_install[@]}"; do
-          if [[ $package != "fastfetch" ]]; then
-            other_packages+=("$package")
-          fi
-        done
-        if [ ${#other_packages[@]} -gt 0 ]; then
-          sudo apt-get install -y "${other_packages[@]}"
+      if ! command -v add-apt-repository &>/dev/null; then
+        echo "add-apt-repository not found, installing software-properties-common"
+        sudo apt-get install -y software-properties-common || true
+      fi
+      if command -v add-apt-repository &>/dev/null; then
+        if ! sudo add-apt-repository -y ppa:zhangsongcui3371/fastfetch; then
+          echo "Could not add the fastfetch PPA, continuing without it"
         fi
-        echo ""
-        echo "Note: fastfetch is not available in your Debian repositories."
-        echo "You can install it manually from: https://github.com/fastfetch-cli/fastfetch/releases"
+        sudo apt-get update
+      else
+        echo "Could not install add-apt-repository, skipping fastfetch PPA"
       fi
     fi
+    apt_install_packages
+  elif [[ $DISTRO == *"Debian"* ]]; then
+    sudo apt-get update
+    apt_install_packages
   elif [[ $DISTRO == *"Fedora"* ]]; then
     sudo dnf install -y "${packages_to_install[@]}"
   elif [[ $DISTRO == *"Arch"* ]]; then
@@ -168,4 +201,5 @@ else
   exit
 fi
 
+require_clone_tools
 cloneAndStow
