@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Service
+MimeType=all/allfiles;
+X-KDE-Protocols=file
+X-KDE-Priority=TopLevel
+X-KDE-StartupNotify=false
+Actions=uploadToZipline
+
+[Desktop Action uploadToZipline]
+Name=Upload to Zipline
+Icon=cloud-upload
+Exec=/home/wild/Scripts/upload-file.sh %F
