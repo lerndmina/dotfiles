@@ -214,11 +214,37 @@ if [ "$(uname)" == "Darwin" ]; then
   fi
 
 else
-  DISCORD_DIR=$(ls -d "$HOME/.config/discord/app-"* 2>/dev/null | sort -V | tail -1)
+  # First match wins. `|| true`: under pipefail a failed ls would abort the script
+  # silently before the "not found" message.
+  DISCORD_DIR=""
+  for d in \
+    /var/lib/flatpak/app/com.discordapp.Discord/current/active/files/discord \
+    "$HOME/.local/share/flatpak/app/com.discordapp.Discord/current/active/files/discord" \
+    /usr/share/discord /usr/lib64/discord /opt/discord \
+    "$(ls -d "$HOME/.config/discord/app-"* 2>/dev/null | sort -V | tail -1 || true)"; do
+    if [ -n "$d" ] && [ -d "$d/resources" ]; then
+      DISCORD_DIR=$d
+      break
+    fi
+  done
   if [ -z "$DISCORD_DIR" ]; then
-    echo "Could not find Discord installation in $HOME/.config/discord/"
+    echo "Could not find a Discord installation (Flatpak, /usr/share, /opt or ~/.config/discord)"
     exit 1
   fi
+
+  # Flatpak (system) and RPM installs are root-owned. The CLI refuses to run as a
+  # root login but supports sudo: it reads SUDO_USER for the real ~/.config/Vencord
+  # and adds the Flatpak --filesystem override for it.
+  SUDO=""
+  if [ ! -w "$DISCORD_DIR/resources" ]; then
+    SUDO="sudo"
+  fi
+
+  if command -v flatpak >/dev/null 2>&1 && flatpak ps --columns=application 2>/dev/null | grep -qx com.discordapp.Discord; then
+    echo "Stopping Discord (Flatpak)"
+    flatpak kill com.discordapp.Discord || true
+  fi
+  pkill -x Discord 2>/dev/null || true
 
   outfile=$(mktemp)
   trap 'rm -f "$outfile"' EXIT
@@ -228,15 +254,32 @@ else
     -o "$outfile" -L --fail
   chmod +x "$outfile"
 
-  echo "Installing to $DISCORD_DIR"
-  # ParseDiscord requires resources/app to exist; Electron must not find it after patching
+  echo "Installing to $DISCORD_DIR${SUDO:+ (via sudo)}"
+  # ParseDiscord requires resources/app to exist when there is no app.asar (the
+  # ~/.config/discord/app-* layout); Electron must not find it after patching
   run_installer() {
-    mkdir -p "$DISCORD_DIR/resources/app"
-    "$outfile" "$@" -location "$DISCORD_DIR"
-    rmdir "$DISCORD_DIR/resources/app" 2>/dev/null || true
+    local made_app=0
+    if [ ! -e "$DISCORD_DIR/resources/app.asar" ] && [ ! -e "$DISCORD_DIR/resources/_app.asar" ]; then
+      $SUDO mkdir -p "$DISCORD_DIR/resources/app"
+      made_app=1
+    fi
+    $SUDO "$outfile" "$@" -location "$DISCORD_DIR"
+    if [ "$made_app" = "1" ]; then
+      $SUDO rmdir "$DISCORD_DIR/resources/app" 2>/dev/null || true
+    fi
   }
   run_installer -install
   if [ "${INSTALL_OPENASAR:-0}" = "1" ]; then
     run_installer -install-openasar
   fi
+
+  # The patched app.asar requires ~/.config/Vencord/dist/patcher.js, which the
+  # Flatpak sandbox cannot see by default, and the CLI does not reliably grant it.
+  # A --user override covers system and user installs and needs no root.
+  case "$DISCORD_DIR" in
+    */flatpak/*)
+      echo "Granting the Flatpak access to ~/.config/Vencord"
+      flatpak override --user com.discordapp.Discord --filesystem=xdg-config/Vencord
+      ;;
+  esac
 fi
