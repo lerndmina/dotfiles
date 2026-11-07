@@ -1,0 +1,23 @@
+#!/bin/bash
+# Keep tailnet traffic on tailscale0 while Windscribe is connected.
+#
+# Windscribe adds "100.64.0.0/10 via <lan gw> dev eno1" to main and a
+# "lookup main suppress_prefixlength 0" rule that sits ahead of Tailscale's
+# table 52. Two /11s on tailscale0 are more specific than that /10, so they
+# win inside Windscribe's own rule no matter where it places its priorities.
+#
+# Only adds a route when it's missing, so running it from the watcher can't
+# feed back into its own route events.
+set -u
+
+dev=tailscale0
+prefixes=(100.64.0.0/11 100.96.0.0/11)
+
+[[ -e /sys/class/net/$dev ]] || exit 0
+
+for p in "${prefixes[@]}"; do
+	if [[ -z $(ip -4 route show exact "$p" dev "$dev" table main) ]]; then
+		ip -4 route replace "$p" dev "$dev" table main &&
+			echo "added $p dev $dev"
+	fi
+done

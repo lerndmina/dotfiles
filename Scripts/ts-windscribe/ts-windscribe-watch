@@ -1,0 +1,14 @@
+#!/bin/bash
+# Re-apply tailnet routes whenever tailscale0, utun420 or Windscribe's CGNAT
+# route changes (interface up/down, Windscribe reconnect).
+set -u
+
+apply=/usr/local/sbin/ts-windscribe-routes
+
+"$apply"
+
+ip monitor link route | while read -r line; do
+	case $line in
+	*tailscale0* | *utun420* | *100.64.0.0/10*) "$apply" ;;
+	esac
+done

@@ -1,0 +1,13 @@
+[Unit]
+Description=Keep tailnet routes on tailscale0 alongside Windscribe
+After=tailscaled.service windscribe-helper.service
+Wants=tailscaled.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/ts-windscribe-watch
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
