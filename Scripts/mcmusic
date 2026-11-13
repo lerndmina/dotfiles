@@ -1,0 +1,1069 @@
+#!/usr/bin/env bash
+# mcmusic: convert music to Minecraft-friendly Ogg Vorbis (mono, 44.1 kHz, 32 kbps),
+# queue convert/combine jobs from a gum TUI, and export Nexo jukebox config.
+#
+# Port of ConvertForMC.ps1 and merge-ogg.ps1. The downmix uses pan '<', which
+# renormalises the coefficients to sum to 1, so the mono mix can't come out
+# louder than the source (ffmpeg's plain -ac 1 adds about +3 dB on stereo).
+#
+#   mcmusic               interactive TUI (needs gum: sudo dnf install gum)
+#   mcmusic --selftest    headless test of convert, combine and export
+#   mcmusic --help
+
+set -euo pipefail
+shopt -s nullglob
+
+SELF=$(readlink -f "${BASH_SOURCE[0]}")
+readonly SELF
+readonly DOWNMIX='pan=mono|c0<FL+FR+FC+BL+BR+SL+SR+LFE'
+readonly AUDIO_EXTS=(mp3 wav flac m4a aac wma aiff alac webm opus mp4 mkv ogg)
+readonly NS=custom_music
+readonly COLOURS=(dark_aqua aqua red dark_red yellow gold green dark_green blue dark_blue
+                  light_purple dark_purple white gray dark_gray black)
+readonly TEXTURES=(13 cat blocks chirp far mall mellow stal strad ward 11 wait otherside 5
+                   pigstep relic creator creator_music_box precipice tears lava_chicken)
+readonly US=$'\x1f'   # separator for file lists inside one queue entry
+
+CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/mcmusic
+CONFIG_FILE=$CONFIG_DIR/settings
+SETTING_KEYS=(BITRATE SAMPLE_RATE OVERWRITE EXPORT_BASE SERVER_HOST SERVER_NEXO_DIR)
+
+BITRATE=32k
+SAMPLE_RATE=44100
+OVERWRITE=0
+DRY_RUN=0            # session only, never saved
+EXPORT_BASE=$HOME/Music/mcmusic-exports
+SERVER_HOST=root@thirdplacemc
+SERVER_NEXO_DIR=/var/lib/pelican/volumes/3b3e6f44-2d7d-4b96-a96f-6a4facbd21a0/plugins/Nexo
+
+TUI=0
+
+# Queue: one index per job across these arrays.
+JOB_TYPE=()    # convert | combine
+JOB_OUT=()     # output folder
+JOB_FILES=()   # absolute paths joined with $US
+JOB_GAP=()     # combine: seconds of silence between tracks
+JOB_NAME=()    # combine: output base name
+
+# Oggs produced (or already present) in this session, for the export step.
+PRODUCED=()
+declare -A PRODUCED_SRC=()   # ogg -> original source file (tags / filename guesses)
+
+# Per-job counters set by the run functions.
+C_OK=0 C_SKIP=0 C_FAIL=0
+
+# ---------------------------------------------------------------- output
+
+if [[ -t 1 ]]; then
+  R=$'\e[31m' G=$'\e[32m' Y=$'\e[33m' B=$'\e[1m' D=$'\e[2m' N=$'\e[0m'
+else
+  R='' G='' Y='' B='' D='' N=''
+fi
+info() { printf '%s\n' "$*"; }
+ok()   { printf '%s%s%s\n' "$G" "$*" "$N"; }
+warn() { printf '%s%s%s\n' "$Y" "$*" "$N" >&2; }
+err()  { printf '%s%s%s\n' "$R" "$*" "$N" >&2; }
+die()  { err "$*"; exit 1; }
+
+pause() {
+  printf '\n%sPress any key to continue%s' "$D" "$N" >&2
+  read -rsn1 </dev/tty || true
+  printf '\n' >&2
+}
+
+# ---------------------------------------------------------------- settings
+
+load_settings() {
+  [[ -r $CONFIG_FILE ]] || return 0
+  local key val
+  while IFS='=' read -r key val; do
+    [[ $key =~ ^[A-Z_]+$ ]] || continue
+    case " ${SETTING_KEYS[*]} " in
+      *" $key "*) printf -v "$key" '%s' "$val" ;;
+    esac
+  done <"$CONFIG_FILE"
+}
+
+save_settings() {
+  mkdir -p "$CONFIG_DIR"
+  local k
+  for k in "${SETTING_KEYS[@]}"; do printf '%s=%s\n' "$k" "${!k}"; done >"$CONFIG_FILE"
+}
+
+# ---------------------------------------------------------------- naming
+
+# Same rules as Get-McBaseName in ConvertForMC.ps1: lowercase, drop a
+# trailing YouTube id "[xxxxxxxxxxx]", keep only a-z and 0-9.
+mc_basename() {
+  local lower=${1,,} stripped clean
+  stripped=$(sed -E 's/[[:space:]]*\[[a-z0-9_-]{11}\][[:space:]]*//g' <<<"$lower")
+  clean=$(LC_ALL=C tr -cd 'a-z0-9' <<<"$stripped")
+  [[ -n $clean ]] || clean=$(LC_ALL=C tr -cd 'a-z0-9' <<<"$lower")
+  printf '%s\n' "${clean:-audio}"
+}
+
+# "Some Artist" -> some_artist
+snake() {
+  local s
+  s=$(LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$1" | LC_ALL=C sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')
+  printf '%s\n' "$s"
+}
+
+is_audio() {
+  local ext=${1##*.} e
+  ext=${ext,,}
+  for e in "${AUDIO_EXTS[@]}"; do [[ $ext == "$e" ]] && return 0; done
+  return 1
+}
+
+# Audio file names (not paths) in a folder, sorted.
+list_audio() {
+  local f
+  while IFS= read -r f; do
+    is_audio "$f" && printf '%s\n' "$f"
+  done < <(find "$1" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort -f)
+}
+
+list_ogg() {
+  find "$1" -maxdepth 1 -type f -iname '*.ogg' -printf '%f\n' | LC_ALL=C sort -f
+}
+
+split_files() { # string arrayname
+  local -n _out=$2
+  IFS=$US read -r -a _out <<<"$1"
+}
+
+join_files() {
+  local IFS=$US
+  printf '%s' "$*"
+}
+
+human_size() { numfmt --to=iec --suffix=B "$(stat -c %s "$1")"; }
+
+duration_secs() { # ceil seconds
+  ffprobe -v error -show_entries format=duration -of csv=p=0 "$1" 2>/dev/null |
+    awk 'NF && !done { d = $1 + 0; c = int(d); if (d > c) c++; print c; done = 1 }' || true
+}
+
+# ---------------------------------------------------------------- ffmpeg
+
+ffmpeg_convert() { # in out bitrate samplerate
+  local in=$1 out=$2 br=$3 sr=$4
+  local tmp=${out%.ogg}.part-$$.ogg
+  if ffmpeg -nostdin -y -hide_banner -loglevel error \
+       -i "$in" -vn -sn -dn -map 0:a:0 -af "$DOWNMIX" \
+       -c:a libvorbis -b:a "$br" -ar "$sr" -map_metadata -1 "$tmp" && [[ -s $tmp ]]; then
+    mv -f -- "$tmp" "$out"
+  else
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
+# Every input goes through the same downmix, then silence (optional) between
+# tracks, then one concat. Mixed source formats are fine.
+ffmpeg_combine() { # out gap bitrate samplerate file...
+  local out=$1 gap=$2 br=$3 sr=$4
+  shift 4
+  local tmp=${out%.ogg}.part-$$.ogg
+  local -a args=(-nostdin -y -hide_banner -loglevel error)
+  local filter='' labels='' n=0 i=0 f use_gap=0
+  awk -v g="$gap" 'BEGIN { exit !(g > 0) }' && use_gap=1
+  for f in "$@"; do args+=(-i "$f"); done
+  for f in "$@"; do
+    filter+="[$i:a:0]$DOWNMIX,aresample=$sr,aformat=sample_fmts=fltp:channel_layouts=mono[a$i];"
+    labels+="[a$i]"; n=$((n + 1))
+    if ((use_gap && i < $# - 1)); then
+      filter+="anullsrc=r=$sr:cl=mono,atrim=duration=$gap,aformat=sample_fmts=fltp:channel_layouts=mono[g$i];"
+      labels+="[g$i]"; n=$((n + 1))
+    fi
+    i=$((i + 1))
+  done
+  filter+="${labels}concat=n=$n:v=0:a=1[out]"
+  args+=(-filter_complex "$filter" -map '[out]' -c:a libvorbis -b:a "$br" -ar "$sr" -map_metadata -1 "$tmp")
+  if ffmpeg "${args[@]}" && [[ -s $tmp ]]; then
+    mv -f -- "$tmp" "$out"
+  else
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
+# Runs one ffmpeg step through this script's internal subcommands, under a
+# gum spinner in the TUI. Errors go to a per-step log shown on failure.
+run_step() { # title subcommand args...
+  local title=$1 rc=0 log
+  shift
+  log=$(mktemp -t mcmusic-step.XXXXXX)
+  if ((TUI)); then
+    MCMUSIC_LOG=$log gum spin --spinner dot --title "$title" -- "$SELF" "$@" || rc=$?
+  else
+    info "$title"
+    MCMUSIC_LOG=$log "$SELF" "$@" || rc=$?
+  fi
+  if ((rc)); then
+    err "  ffmpeg failed (exit $rc):"
+    sed 's/^/    /' "$log" | tail -n 8 >&2
+  fi
+  rm -f -- "$log"
+  return "$rc"
+}
+
+# ---------------------------------------------------------------- queue
+
+add_job() { # type outdir files-string gap name
+  JOB_TYPE+=("$1"); JOB_OUT+=("$2"); JOB_FILES+=("$3"); JOB_GAP+=("${4:-0}"); JOB_NAME+=("${5:-}")
+}
+
+job_count() { printf '%s' "${#JOB_TYPE[@]}"; }
+
+job_label() { # index
+  local j=$1
+  local -a files
+  split_files "${JOB_FILES[j]}" files
+  if [[ ${JOB_TYPE[j]} == convert ]]; then
+    printf 'Convert %d file(s) -> %s' "${#files[@]}" "${JOB_OUT[j]}"
+  else
+    local gap=''
+    [[ ${JOB_GAP[j]} != 0 ]] && gap=", ${JOB_GAP[j]}s gap"
+    printf 'Combine %d track(s)%s -> %s/%s.ogg' "${#files[@]}" "$gap" "${JOB_OUT[j]}" "${JOB_NAME[j]}"
+  fi
+}
+
+swap_jobs() { # a b
+  local a=$1 b=$2 arr t
+  for arr in JOB_TYPE JOB_OUT JOB_FILES JOB_GAP JOB_NAME; do
+    local -n ref=$arr
+    t=${ref[a]}; ref[a]=${ref[b]}; ref[b]=$t
+    unset -n ref
+  done
+}
+
+remove_job() { # index
+  local j=$1 arr
+  for arr in JOB_TYPE JOB_OUT JOB_FILES JOB_GAP JOB_NAME; do
+    local -n ref=$arr
+    ref=("${ref[@]:0:j}" "${ref[@]:j+1}")
+    unset -n ref
+  done
+}
+
+clear_queue() { JOB_TYPE=() JOB_OUT=() JOB_FILES=() JOB_GAP=() JOB_NAME=(); }
+
+remember_output() { # ogg source
+  local o=$1 p
+  for p in "${PRODUCED[@]}"; do [[ $p == "$o" ]] && { PRODUCED_SRC[$o]=$2; return; }; done
+  PRODUCED+=("$o")
+  PRODUCED_SRC[$o]=$2
+}
+
+run_convert_job() {
+  local j=$1 outdir=${JOB_OUT[j]} f base name out
+  local -a files
+  local -A claimed=()
+  split_files "${JOB_FILES[j]}" files
+  for f in "${files[@]}"; do
+    base=${f##*/}
+    name="$(mc_basename "${base%.*}").ogg"
+    out=$outdir/$name
+    if [[ -n ${claimed[$name]:-} ]]; then
+      warn "  Skip '$base': name collides with '${claimed[$name]}' -> $name"
+      C_SKIP=$((C_SKIP + 1)); continue
+    fi
+    claimed[$name]=$base
+    if [[ ! -r $f ]]; then
+      err "  Missing source: $f"; C_FAIL=$((C_FAIL + 1)); continue
+    fi
+    if [[ $(readlink -f -- "$f") == "$(readlink -m -- "$out")" ]]; then
+      warn "  Skip '$base': source is the output file"
+      C_SKIP=$((C_SKIP + 1)); continue
+    fi
+    if [[ -e $out && $OVERWRITE != 1 ]]; then
+      warn "  Skip '$base': $name already exists (overwrite is off)"
+      remember_output "$out" "$f"
+      C_SKIP=$((C_SKIP + 1)); continue
+    fi
+    if ((DRY_RUN)); then
+      info "  Would convert '$base' -> $out"
+      C_OK=$((C_OK + 1)); continue
+    fi
+    mkdir -p -- "$outdir"
+    if run_step "  Converting '$base' -> $name" __convert "$f" "$out" "$BITRATE" "$SAMPLE_RATE"; then
+      ok "  Converted $name ($(human_size "$out"))"
+      remember_output "$out" "$f"
+      C_OK=$((C_OK + 1))
+    else
+      err "  Conversion failed for '$base'"
+      C_FAIL=$((C_FAIL + 1))
+    fi
+  done
+}
+
+run_combine_job() {
+  local j=$1 outdir=${JOB_OUT[j]} out f
+  local -a files
+  split_files "${JOB_FILES[j]}" files
+  out=$outdir/${JOB_NAME[j]}.ogg
+  for f in "${files[@]}"; do
+    [[ -r $f ]] || { err "  Missing source: $f"; C_FAIL=$((C_FAIL + 1)); return; }
+  done
+  if [[ -e $out && $OVERWRITE != 1 ]]; then
+    warn "  Skip: ${out##*/} already exists (overwrite is off)"
+    remember_output "$out" "$out"
+    C_SKIP=$((C_SKIP + 1)); return
+  fi
+  if ((DRY_RUN)); then
+    info "  Would combine ${#files[@]} track(s) -> $out"
+    for f in "${files[@]}"; do info "    ${f##*/}"; done
+    C_OK=$((C_OK + 1)); return
+  fi
+  mkdir -p -- "$outdir"
+  if run_step "  Combining ${#files[@]} track(s) -> ${out##*/}" \
+       __combine "$out" "${JOB_GAP[j]}" "$BITRATE" "$SAMPLE_RATE" "${files[@]}"; then
+    ok "  Combined ${out##*/} ($(human_size "$out"), $(duration_secs "$out")s)"
+    remember_output "$out" "$out"
+    C_OK=$((C_OK + 1))
+  else
+    err "  Combine failed"
+    C_FAIL=$((C_FAIL + 1))
+  fi
+}
+
+# Runs every queued job in order; a failure doesn't stop the run.
+# Returns 1 if anything failed.
+run_queue() {
+  local total j any_fail=0
+  local -a rows=()
+  total=$(job_count)
+  ((total)) || { warn "The queue is empty."; return 0; }
+  ((DRY_RUN)) && warn "Dry run: nothing will be written."
+  for ((j = 0; j < total; j++)); do
+    C_OK=0 C_SKIP=0 C_FAIL=0
+    printf '\n%sJob %d/%d%s  %s\n' "$B" $((j + 1)) "$total" "$N" "$(job_label "$j")"
+    if [[ ${JOB_TYPE[j]} == convert ]]; then run_convert_job "$j"; else run_combine_job "$j"; fi
+    ((C_FAIL)) && any_fail=1
+    rows+=("$((j + 1))"$'\t'"${JOB_TYPE[j]}"$'\t'"$C_OK"$'\t'"$C_SKIP"$'\t'"$C_FAIL")
+  done
+  printf '\n%sSummary%s\n' "$B" "$N"
+  { printf 'Job\tType\tDone\tSkipped\tFailed\n'; printf '%s\n' "${rows[@]}"; } | column -t -s $'\t'
+  if ((DRY_RUN)); then
+    printf '\nDry run: the queue is kept so you can run it for real.\n'
+  else
+    printf '\n%d track(s) ready for export.\n' "${#PRODUCED[@]}"
+    clear_queue
+  fi
+  return "$any_fail"
+}
+
+# ---------------------------------------------------------------- metadata guesses
+
+tag_value() { # file tagname (case-insensitive, format tags then stream tags)
+  ffprobe -v error -show_entries format_tags:stream_tags -of default=nw=1 "$1" 2>/dev/null |
+    awk -v k="$2" -F= '!done && tolower($1) == "tag:" tolower(k) { sub(/^[^=]*=/, ""); print; done = 1 }' || true
+}
+
+clean_title() {
+  sed -E 's/[[:space:]]*\[[^]]*\]//g
+          s/[[:space:]]*\([^)]*\b(official|lyrics?|music video|audio|visuali[sz]er|[0-9]k|hd)\b[^)]*\)//Ig
+          s/[[:space:]]+/ /g; s/^ //; s/ $//' <<<"$1"
+}
+
+# Prints "artist<TAB>title" for a source file.
+guess_meta() {
+  local f=$1 stem tt ta artist='' title=''
+  stem=${f##*/}; stem=${stem%.*}
+  tt=$(tag_value "$f" title); ta=$(tag_value "$f" artist)
+  if [[ -n $tt && -n $ta && $tt != *" - "* ]]; then
+    artist=$ta title=$tt
+  else
+    local s
+    s=$(clean_title "${tt:-$stem}")
+    if [[ $s == *" - "* ]]; then
+      artist=${s%% - *} title=${s#* - }
+    else
+      [[ -n $tt ]] && s=$(clean_title "$tt")
+      artist=$ta title=$s
+    fi
+  fi
+  artist=$(clean_title "$artist"); title=$(clean_title "$title")
+  printf '%s\t%s\n' "$artist" "${title:-$stem}"
+}
+
+default_item_id() { # artist title
+  local a t
+  a=$(snake "$1"); t=$(snake "$2")
+  if [[ -n $a ]]; then printf 'music_disc_%s_%s\n' "$a" "${t:-track}"; else printf 'music_disc_%s\n' "${t:-track}"; fi
+}
+
+# ---------------------------------------------------------------- export
+
+# Accepted export entries, one index per track.
+E_SRC=() E_NAME=() E_TITLE=() E_ARTIST=() E_ALBUM=() E_COLOUR=() E_TEX=() E_ITEM=() E_DUR=()
+
+reset_export() { E_SRC=() E_NAME=() E_TITLE=() E_ARTIST=() E_ALBUM=() E_COLOUR=() E_TEX=() E_ITEM=() E_DUR=(); }
+
+# Problems with one entry against the ones already accepted; empty = fine.
+validate_entry() { # title name item
+  local i
+  [[ -n $1 ]] || { echo "Title can't be empty."; return; }
+  [[ $2 =~ ^[a-z0-9_]+$ ]] || { echo "Sound name must be a-z, 0-9 and _ only."; return; }
+  [[ $3 =~ ^[a-z0-9_]+$ ]] || { echo "Item id must be a-z, 0-9 and _ only."; return; }
+  for i in "${!E_NAME[@]}"; do
+    [[ ${E_NAME[i]} == "$2" ]] && { echo "Sound name '$2' is already used by '${E_TITLE[i]}' in this export."; return; }
+    [[ ${E_ITEM[i]} == "$3" ]] && { echo "Item id '$3' is already used by '${E_TITLE[i]}' in this export."; return; }
+  done
+  return 0
+}
+
+add_entry() { # src name title artist album colour texture item duration
+  E_SRC+=("$1"); E_NAME+=("$2"); E_TITLE+=("$3"); E_ARTIST+=("$4"); E_ALBUM+=("$5")
+  E_COLOUR+=("$6"); E_TEX+=("$7"); E_ITEM+=("$8"); E_DUR+=("$9")
+}
+
+nocntrl() { LC_ALL=C tr -d '\000-\037\177' <<<"$1"; }
+
+# YAML double-quoted scalar.
+yq() {
+  local s
+  s=$(nocntrl "$1")
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}
+  printf '"%s"' "$s"
+}
+
+# MiniMessage-escape user text, so "<" in a title isn't read as a tag.
+mm() {
+  local s
+  s=$(nocntrl "$1")
+  s=${s//\\/\\\\}; s=${s//</\\<}
+  printf '%s' "$s"
+}
+
+write_sounds_snippet() {
+  local i
+  printf '\n# Added by mcmusic %s\n' "$(date '+%Y-%m-%d %H:%M')"
+  for i in "${!E_NAME[@]}"; do
+    cat <<EOF
+- id: $NS:music.${E_NAME[i]}
+  sound: $NS:music/${E_NAME[i]}
+  subtitle: $(yq "${E_TITLE[i]}")
+  preload: true
+  attenuation_distance: 10
+  stream: true
+  jukebox_playable:
+    comparator_output: 15
+    description: $(yq "${E_TITLE[i]}")
+    duration: ${E_DUR[i]}s
+EOF
+  done
+}
+
+write_items_snippet() {
+  local i
+  printf '\n# Added by mcmusic %s\n' "$(date '+%Y-%m-%d %H:%M')"
+  for i in "${!E_NAME[@]}"; do
+    printf '%s:\n' "${E_ITEM[i]}"
+    printf '  Pack:\n    texture: minecraft:item/music_disc_%s\n' "${E_TEX[i]}"
+    printf '  itemname: %s\n' "$(yq "<${E_COLOUR[i]}>$(mm "${E_TITLE[i]}")")"
+    printf '  material: PAPER\n'
+    if [[ -n ${E_ARTIST[i]} || -n ${E_ALBUM[i]} ]]; then
+      printf '  lore:\n'
+      if [[ -n ${E_ARTIST[i]} ]]; then
+        printf '  - %s\n' "$(yq "<gray>By </gray><white>$(mm "${E_ARTIST[i]}")")"
+      fi
+      if [[ -n ${E_ALBUM[i]} ]]; then
+        printf '  - %s\n' "$(yq "<dark_gray>Album: </dark_gray><white>$(mm "${E_ALBUM[i]}")")"
+      fi
+    fi
+    printf '  Components:\n    jukebox_playable: %s:music.%s\n' "$NS" "${E_NAME[i]}"
+  done
+}
+
+write_instructions() { # export root
+  local root=$1 i names items snd_rel items_rel nexo=$SERVER_NEXO_DIR host=$SERVER_HOST finds=''
+  snd_rel=pack/assets/$NS/sounds/music
+  items_rel=items/thirdplace
+  names=$(IFS='|'; echo "${E_NAME[*]}")
+  for i in "${E_NAME[@]}"; do finds+="-name $i.ogg -o "; done
+  finds=${finds% -o }
+  items=$(IFS='|'; echo "${E_ITEM[*]}")
+  cat <<EOF
+mcmusic export, $(date '+%Y-%m-%d %H:%M'), ${#E_NAME[@]} track(s)
+Server Nexo folder: $nexo
+SSH host:           $host
+Run every command below from this folder:
+  cd $(printf '%q' "$root")
+
+Tracks
+EOF
+  {
+    printf '  Sound id\tItem id\tTitle\tArtist\tLength\n'
+    for i in "${!E_NAME[@]}"; do
+      printf '  %s\t%s\t%s\t%s\t%ss\n' "$NS:music.${E_NAME[i]}" "${E_ITEM[i]}" "${E_TITLE[i]}" "${E_ARTIST[i]:--}" "${E_DUR[i]}"
+    done
+  } | column -t -s $'\t'
+  cat <<EOF
+
+1. Check nothing clashes with what's already on the server
+   Looks for the sound ids in sounds.yml, the item ids under items/, and .ogg files with
+   the same names anywhere in the pack (the old ItemsAdder folder included).
+   No output means no clashes. If something matches, rename it in mcmusic and export again.
+
+     ssh $host 'grep -nE "$NS:music\\.($names)[[:space:]]*\$" "$nexo/sounds.yml"; grep -rnE "^($items):" "$nexo/items"; find "$nexo/pack" -path "*/.assetCache" -prune -o -type f -path "*/$NS/sounds/*" \\( $finds \\) -print'
+
+2. Upload the sound files
+   Copy plugins/Nexo/$snd_rel/*.ogg to $nexo/$snd_rel/
+
+     ssh $host 'mkdir -p "$nexo/$snd_rel"'
+     scp plugins/Nexo/$snd_rel/*.ogg $host:"$nexo/$snd_rel/"
+
+3. Add the sounds to sounds.yml
+   Paste sounds_snippet.yml at the end of the "sounds:" list in $nexo/sounds.yml,
+   at column 0 like the other "- id:" entries. Today "sounds:" is the last section in
+   that file, so appending works too:
+
+     ssh $host 'cat >> "$nexo/sounds.yml"' < sounds_snippet.yml
+
+4. Add the disc items
+   First export only (the file doesn't exist on the server yet):
+
+     ssh $host 'mkdir -p "$nexo/$items_rel" && test ! -e "$nexo/$items_rel/music_discs.yml"' && \\
+       scp plugins/Nexo/$items_rel/music_discs.yml $host:"$nexo/$items_rel/"
+
+   If music_discs.yml already exists, DON'T copy it over (that deletes the discs already
+   in it). Append the snippet instead:
+
+     ssh $host 'cat >> "$nexo/$items_rel/music_discs.yml"' < music_discs_snippet.yml
+
+5. Reload Nexo (server console)
+
+     nexo reload all
+
+   Test a disc in game:
+
+     /nexo give <player> ${E_ITEM[0]}
+EOF
+}
+
+write_export() { # prints the export folder
+  local ts root snd items i
+  ts=$(date +%Y%m%d-%H%M%S)
+  root=$EXPORT_BASE/nexo-export-$ts
+  snd=$root/plugins/Nexo/pack/assets/$NS/sounds/music
+  items=$root/plugins/Nexo/items/thirdplace
+  mkdir -p -- "$snd" "$items"
+  for i in "${!E_NAME[@]}"; do cp -- "${E_SRC[i]}" "$snd/${E_NAME[i]}.ogg"; done
+  write_sounds_snippet >"$root/sounds_snippet.yml"
+  write_items_snippet >"$root/music_discs_snippet.yml"
+  { printf '# Music discs generated by mcmusic. Later exports append to this file.\n'
+    write_items_snippet; } >"$items/music_discs.yml"
+  write_instructions "$root" >"$root/INSTRUCTIONS.txt"
+  printf '%s\n' "$root"
+}
+
+# Builds entries from guesses without asking (selftest / headless).
+auto_entries() { # oggs...
+  local o src meta artist title name item dur problem
+  for o in "$@"; do
+    src=${PRODUCED_SRC[$o]:-$o}
+    meta=$(guess_meta "$src"); artist=${meta%%$'\t'*}; title=${meta#*$'\t'}
+    name=$(mc_basename "$(basename -- "${o%.*}")")
+    item=$(default_item_id "$artist" "$title")
+    dur=$(duration_secs "$o")
+    problem=$(validate_entry "$title" "$name" "$item")
+    [[ -n $dur ]] || problem="unreadable duration"
+    [[ -z $problem ]] || { warn "Skip ${o##*/}: $problem"; continue; }
+    add_entry "$o" "$name" "$title" "$artist" "" dark_aqua strad "$item" "$dur"
+  done
+}
+
+# ---------------------------------------------------------------- TUI helpers
+
+need_deps() {
+  local c
+  for c in ffmpeg ffprobe; do command -v "$c" >/dev/null || die "$c isn't installed (sudo dnf install ffmpeg)."; done
+  local enc
+  enc=$(ffmpeg -hide_banner -encoders 2>/dev/null) || true
+  [[ $enc == *libvorbis* ]] || die "This ffmpeg has no libvorbis encoder."
+}
+
+need_tui() {
+  command -v gum >/dev/null || die "gum isn't installed. Install it with: sudo dnf install gum"
+  [[ -t 0 && -t 1 ]] || die "mcmusic needs an interactive terminal (or run: mcmusic --selftest)."
+  TUI=1
+}
+
+menu() { # header options... -> prints choice; non-zero on Esc
+  local h=$1
+  shift
+  printf '%s\n' "$@" | gum choose --header "$h" --height 20
+}
+
+ask() { # header value [placeholder]
+  gum input --header "$1" --value "$2" --placeholder "${3:-}" --width 0
+}
+
+status_line() {
+  local s
+  s="Queue: $(job_count) job(s)   Ready for export: ${#PRODUCED[@]}   $BITRATE mono ${SAMPLE_RATE} Hz"
+  ((OVERWRITE)) && s+="   overwrite ON"
+  ((DRY_RUN)) && s+="   DRY RUN"
+  printf '%s' "$s"
+}
+
+banner() {
+  clear
+  gum style --border rounded --border-foreground 39 --padding "0 2" \
+    "$(gum style --bold --foreground 39 'mcmusic')  Minecraft music converter" "$(status_line)"
+}
+
+# Folder browser on gum filter (gum 0.17's `gum file` hides its first rows).
+browse_dir() { # start -> prints absolute folder
+  local cur c n
+  local -a subs
+  cur=$(readlink -f -- "$1")
+  while :; do
+    mapfile -t subs < <(find "$cur" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%f/\n' 2>/dev/null | LC_ALL=C sort -f)
+    n=$(list_audio "$cur" | wc -l)
+    c=$({ printf '%s\n' "[ Use this folder ]" "../"; printf '%s\n' "${subs[@]}"; } |
+          gum filter --height 20 --placeholder "type to filter folders" \
+            --header "$cur  ($n audio file(s) here)") || return 1
+    case $c in
+      "[ Use this folder ]") printf '%s\n' "$cur"; return 0 ;;
+      ../) cur=$(dirname -- "$cur") ;;
+      *) cur=${cur%/}/${c%/} ;;
+    esac
+  done
+}
+
+pick_dir() { # default -> prints absolute folder
+  local def=${1:-$PWD} c p=''
+  c=$(menu "Source folder" "Use $def" "Type a path" "Browse") || return 1
+  case $c in
+    "Use "*) p=$def ;;
+    "Type a path")
+      p=$(ask "Folder path" "$def") || return 1
+      p=${p/#\~/$HOME} ;;
+    Browse) p=$(browse_dir "$def") || return 1 ;;
+  esac
+  [[ -d $p ]] || { warn "Not a folder: $p"; pause; return 1; }
+  readlink -f -- "$p"
+}
+
+# Prints chosen absolute paths, one per line.
+pick_files() { # folder filter(audio|ogg)
+  local dir=$1 kind=${2:-audio} c sel
+  local -a all
+  if [[ $kind == ogg ]]; then mapfile -t all < <(list_ogg "$dir"); else mapfile -t all < <(list_audio "$dir"); fi
+  ((${#all[@]})) || { warn "No $kind files in $dir"; pause; return 1; }
+  c=$(menu "${#all[@]} $kind file(s) in $dir" "All ${#all[@]} files" "Pick files") || return 1
+  if [[ $c == All* ]]; then
+    sel=$(printf '%s\n' "${all[@]}")
+  else
+    sel=$(printf '%s\n' "${all[@]}" | gum filter --no-limit --height 20 \
+            --header "Tab selects, Enter confirms, type to filter" --placeholder "filter") || return 1
+  fi
+  [[ -n $sel ]] || return 1
+  while IFS= read -r c; do printf '%s/%s\n' "$dir" "$c"; done <<<"$sel"
+}
+
+# ---------------------------------------------------------------- TUI screens
+
+screen_add_convert() {
+  local dir outdir
+  local -a files
+  banner
+  dir=$(pick_dir "$PWD") || return 0
+  mapfile -t files < <(pick_files "$dir" audio) || true
+  ((${#files[@]})) || return 0
+  outdir=$(ask "Output folder" "$dir/ogg-music") || return 0
+  outdir=${outdir/#\~/$HOME}
+  [[ -n $outdir ]] || return 0
+  add_job convert "$outdir" "$(join_files "${files[@]}")"
+  ok "Queued: $(job_label $(($(job_count) - 1)))"
+  sleep 0.8
+}
+
+order_tracks() { # arrayname
+  local -n _t=$1
+  local c a idx i t
+  local -a opts
+  while :; do
+    opts=("Done")
+    for i in "${!_t[@]}"; do opts+=("$((i + 1)). ${_t[i]##*/}"); done
+    c=$(menu "Track order. Pick a track to move or remove it." "${opts[@]}") || return 0
+    [[ $c == Done ]] && return 0
+    idx=$((${c%%.*} - 1))
+    a=$(menu "${_t[idx]##*/}" "Move up" "Move down" "Move to top" "Move to bottom" "Remove" "Back") || continue
+    case $a in
+      "Move up") ((idx > 0)) && { t=${_t[idx - 1]}; _t[idx - 1]=${_t[idx]}; _t[idx]=$t; } || true ;;
+      "Move down") ((idx < ${#_t[@]} - 1)) && { t=${_t[idx + 1]}; _t[idx + 1]=${_t[idx]}; _t[idx]=$t; } || true ;;
+      "Move to top") t=${_t[idx]}; _t=("$t" "${_t[@]:0:idx}" "${_t[@]:idx+1}") ;;
+      "Move to bottom") t=${_t[idx]}; _t=("${_t[@]:0:idx}" "${_t[@]:idx+1}" "$t") ;;
+      Remove) _t=("${_t[@]:0:idx}" "${_t[@]:idx+1}") ;;
+    esac
+    ((${#_t[@]})) || return 0
+  done
+}
+
+screen_add_combine() {
+  local dir='' first_dir='' gap name outdir c
+  local -a tracks=() more
+  while :; do
+    banner
+    ((${#tracks[@]})) && info "${#tracks[@]} track(s) picked so far."
+    dir=$(pick_dir "${dir:-$PWD}") || break
+    [[ -n $first_dir ]] || first_dir=$dir
+    more=()
+    mapfile -t more < <(pick_files "$dir" audio) || true
+    tracks+=("${more[@]}")
+    c=$(menu "${#tracks[@]} track(s) picked" "Continue" "Add files from another folder") || break
+    [[ $c == Continue ]] && break
+  done
+  ((${#tracks[@]})) || return 0
+  order_tracks tracks
+  ((${#tracks[@]})) || return 0
+  while :; do
+    gap=$(ask "Silence between tracks, in seconds (0 for none)" "0") || return 0
+    [[ $gap =~ ^[0-9]+(\.[0-9]+)?$ ]] && break
+    warn "Enter a number like 0, 1 or 2.5"
+  done
+  name=$(ask "Output name (cleaned to a-z0-9 like converted files)" "combined") || return 0
+  name=$(mc_basename "$name")
+  outdir=$(ask "Output folder" "$first_dir/ogg-music") || return 0
+  outdir=${outdir/#\~/$HOME}
+  [[ -n $outdir ]] || return 0
+  add_job combine "$outdir" "$(join_files "${tracks[@]}")" "$gap" "$name"
+  ok "Queued: $(job_label $(($(job_count) - 1)))"
+  sleep 0.8
+}
+
+screen_queue() {
+  local c a idx i n
+  local -a opts files
+  while :; do
+    banner
+    n=$(job_count)
+    ((n)) || { warn "The queue is empty."; pause; return 0; }
+    opts=("Back")
+    for ((i = 0; i < n; i++)); do opts+=("$((i + 1)). $(job_label "$i")"); done
+    opts+=("Clear queue")
+    c=$(menu "Pick a job to move, inspect or remove it" "${opts[@]}") || return 0
+    case $c in
+      Back) return 0 ;;
+      "Clear queue") gum confirm "Remove all $n job(s)?" && clear_queue; continue ;;
+    esac
+    idx=$((${c%%.*} - 1))
+    a=$(menu "$(job_label "$idx")" "Show files" "Move up" "Move down" "Remove" "Back") || continue
+    case $a in
+      "Show files")
+        split_files "${JOB_FILES[idx]}" files
+        printf '%s\n' "${files[@]}" | gum pager ;;
+      "Move up") ((idx > 0)) && swap_jobs "$idx" $((idx - 1)) || true ;;
+      "Move down") ((idx < n - 1)) && swap_jobs "$idx" $((idx + 1)) || true ;;
+      Remove) remove_job "$idx" ;;
+    esac
+  done
+}
+
+screen_run() {
+  local n
+  banner
+  n=$(job_count)
+  ((n)) || { warn "The queue is empty."; pause; return 0; }
+  gum confirm "Run $n job(s)?" || return 0
+  run_queue || true
+  pause
+}
+
+# One gum form per track. Returns 0 = accepted, 1 = skipped, 2 = cancel export.
+track_form() { # ogg index total
+  local o=$1 k=$2 total=$3 src meta title artist album='' name item dur problem c
+  src=${PRODUCED_SRC[$o]:-$o}
+  meta=$(guess_meta "$src"); artist=${meta%%$'\t'*}; title=${meta#*$'\t'}
+  name=$(mc_basename "$(basename -- "${o%.*}")")
+  item=$(default_item_id "$artist" "$title")
+  dur=$(duration_secs "$o")
+  [[ -n $dur ]] || { warn "Can't read the length of ${o##*/}, skipping it."; pause; return 1; }
+  while :; do
+    banner
+    gum style --bold "Track $k of $total: ${o##*/}  (${dur}s)"
+    if ! { title=$(ask "Disc title" "$title") &&
+           artist=$(ask "Artist (blank for no 'By' line)" "$artist") &&
+           album=$(ask "Album line (optional)" "$album") &&
+           FORM_COLOUR=$(printf '%s\n' "${COLOURS[@]}" | gum choose --header "Name colour" --selected "$FORM_COLOUR" --height 18) &&
+           FORM_TEX=$(printf '%s\n' "${TEXTURES[@]}" | gum choose --header "Disc texture (minecraft:item/music_disc_...)" --selected "$FORM_TEX" --height 18) &&
+           name=$(ask "Sound name, a-z 0-9 _ (becomes $NS:music.<name>)" "$name") &&
+           item=$(ask "Nexo item id" "$item"); }; then
+      c=$(menu "Form cancelled" "Back to the form" "Skip this track" "Cancel the export") || c="Skip this track"
+      case $c in
+        Back*) continue ;;
+        Skip*) return 1 ;;
+        *) return 2 ;;
+      esac
+    fi
+    [[ -n $FORM_COLOUR ]] || FORM_COLOUR=dark_aqua
+    [[ -n $FORM_TEX ]] || FORM_TEX=strad
+    problem=$(validate_entry "$title" "$name" "$item")
+    if [[ -n $problem ]]; then warn "$problem"; pause; continue; fi
+    banner
+    gum style --border normal --padding "0 1" \
+      "Title:   $title" "Artist:  ${artist:--}" "Album:   ${album:--}" \
+      "Colour:  $FORM_COLOUR" "Texture: music_disc_$FORM_TEX" \
+      "Sound:   $NS:music.$name" "Item:    $item" "Length:  ${dur}s"
+    c=$(menu "Track $k of $total" "Looks good" "Edit again" "Skip this track" "Cancel the export") || continue
+    case $c in
+      "Looks good") add_entry "$o" "$name" "$title" "$artist" "$album" "$FORM_COLOUR" "$FORM_TEX" "$item" "$dur"; return 0 ;;
+      "Edit again") continue ;;
+      "Skip this track") return 1 ;;
+      *) return 2 ;;
+    esac
+  done
+}
+
+screen_export() {
+  local c dir root i rc picked o d
+  local -a oggs=()
+  banner
+  if ((${#PRODUCED[@]})); then
+    c=$(menu "Which tracks?" "Tracks from this session (${#PRODUCED[@]})" "Pick .ogg files from a folder") || return 0
+  else
+    c="Pick"
+  fi
+  if [[ $c == Tracks* ]]; then
+    # Numbered labels; the folder is shown only when two tracks share a file name,
+    # so it doesn't pollute the fuzzy filter otherwise.
+    local -A seen=()
+    for o in "${PRODUCED[@]}"; do seen[${o##*/}]=$((${seen[${o##*/}]:-0} + 1)); done
+    picked=$(for i in "${!PRODUCED[@]}"; do
+               o=${PRODUCED[i]}
+               d=${o%/*}
+               if ((${seen[${o##*/}]} > 1)); then
+                 printf '%d. %s   (%s)\n' $((i + 1)) "${o##*/}" "${d/#$HOME/\~}"
+               else
+                 printf '%d. %s\n' $((i + 1)) "${o##*/}"
+               fi
+             done | gum filter --no-limit --height 20 \
+               --header "Tab selects, Enter confirms (Enter alone takes the highlighted one)") || return 0
+    while IFS= read -r c; do
+      [[ $c =~ ^([0-9]+)\. ]] && oggs+=("${PRODUCED[BASH_REMATCH[1] - 1]}")
+    done <<<"$picked"
+  else
+    dir=$(pick_dir "$PWD") || return 0
+    mapfile -t oggs < <(pick_files "$dir" ogg) || true
+  fi
+  ((${#oggs[@]})) || return 0
+  reset_export
+  FORM_COLOUR=dark_aqua FORM_TEX=strad
+  for i in "${!oggs[@]}"; do
+    rc=0
+    track_form "${oggs[i]}" $((i + 1)) "${#oggs[@]}" || rc=$?
+    ((rc == 2)) && { warn "Export cancelled."; pause; return 0; }
+  done
+  ((${#E_NAME[@]})) || { warn "No tracks accepted, nothing exported."; pause; return 0; }
+  root=$(write_export)
+  gum pager <"$root/INSTRUCTIONS.txt" || true
+  banner
+  ok "Exported ${#E_NAME[@]} track(s) to:"
+  info "  $root"
+  info "  INSTRUCTIONS.txt, sounds_snippet.yml, music_discs_snippet.yml, plugins/Nexo/..."
+  pause
+}
+
+screen_settings() {
+  local c v
+  while :; do
+    banner
+    c=$(menu "Settings (saved to $CONFIG_FILE; dry run is per session)" \
+      "Bitrate: $BITRATE" \
+      "Sample rate: $SAMPLE_RATE" \
+      "Overwrite existing outputs: $( ((OVERWRITE)) && echo on || echo off)" \
+      "Dry run: $( ((DRY_RUN)) && echo on || echo off)" \
+      "Export folder: $EXPORT_BASE" \
+      "Server SSH host (instructions only): $SERVER_HOST" \
+      "Server Nexo folder (instructions only): $SERVER_NEXO_DIR" \
+      "Back") || return 0
+    case $c in
+      Bitrate*)
+        v=$(ask "Vorbis bitrate, e.g. 32k, 48k, 64k" "$BITRATE") || continue
+        [[ $v =~ ^[0-9]+k$ ]] && BITRATE=$v || { warn "Use a number followed by k, like 32k"; pause; } ;;
+      Sample*)
+        v=$(ask "Sample rate in Hz" "$SAMPLE_RATE") || continue
+        [[ $v =~ ^[0-9]{4,6}$ ]] && SAMPLE_RATE=$v || { warn "Use a number like 44100 or 48000"; pause; } ;;
+      Overwrite*) OVERWRITE=$((1 - OVERWRITE)) ;;
+      Dry*) DRY_RUN=$((1 - DRY_RUN)) ;;
+      Export*)
+        v=$(ask "Export folder" "$EXPORT_BASE") || continue
+        [[ -n $v ]] && EXPORT_BASE=${v/#\~/$HOME} ;;
+      "Server SSH"*)
+        v=$(ask "SSH host used in the upload commands" "$SERVER_HOST") || continue
+        [[ -n $v ]] && SERVER_HOST=$v ;;
+      "Server Nexo"*)
+        v=$(ask "Nexo plugin folder on the server" "$SERVER_NEXO_DIR") || continue
+        [[ -n $v ]] && SERVER_NEXO_DIR=${v%/} ;;
+      Back) return 0 ;;
+    esac
+    save_settings
+  done
+}
+
+tui_main() {
+  local c
+  while :; do
+    banner
+    c=$(menu "What next?" \
+      "Add convert job" \
+      "Add combine job" \
+      "Review queue ($(job_count))" \
+      "Run queue" \
+      "Export for Nexo" \
+      "Settings" \
+      "Quit") || c=Quit
+    case $c in
+      "Add convert job") screen_add_convert ;;
+      "Add combine job") screen_add_combine ;;
+      Review*) screen_queue ;;
+      "Run queue") screen_run ;;
+      Export*) screen_export ;;
+      Settings) screen_settings ;;
+      Quit)
+        if (($(job_count))) && ! gum confirm "$(job_count) job(s) still queued. Quit anyway?"; then continue; fi
+        clear
+        return 0 ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------- selftest
+
+volume_db() { # file max|mean
+  ffmpeg -nostdin -hide_banner -i "$1" -af volumedetect -f null - 2>&1 |
+    awk -F': ' -v k="$2_volume" '$0 ~ k { sub(/ dB/, "", $2); print $2 }'
+}
+
+selftest() {
+  local dir=${1:-} fails=0 f o pin pout ch sr dur want root
+  [[ -n $dir ]] || dir=$(mktemp -d -t mcmusic-selftest.XXXXXX)
+  mkdir -p -- "$dir"
+  dir=$(readlink -f -- "$dir")
+  EXPORT_BASE=$dir/export
+  info "Selftest folder: $dir"
+
+  check() { # description command...
+    local d=$1
+    shift
+    if "$@"; then ok "  PASS  $d"; else err "  FAIL  $d"; fails=$((fails + 1)); fi
+  }
+
+  # Stereo, mono and 5.1 sources with different formats, plus a collision.
+  ffmpeg -nostdin -y -loglevel error -f lavfi -i "sine=440:d=3" \
+    -filter_complex "[0]asplit[a][b];[a][b]join=inputs=2:channel_layout=stereo" "$dir/Test Artist - Stereo Song [dQw4w9WgXcQ].wav"
+  ffmpeg -nostdin -y -loglevel error -f lavfi -i "sine=660:d=2" -ac 1 \
+    -metadata artist="Tag Artist" -metadata title="Tagged Mono" "$dir/mono_tagged.flac"
+  ffmpeg -nostdin -y -loglevel error -f lavfi -i "sine=330:d=2" -af "aformat=channel_layouts=5.1" \
+    -c:a aac "$dir/Surround (Official Video).m4a"
+  cp -- "$dir/mono_tagged.flac" "$dir/Mono Tagged.flac"   # collides -> monotagged.ogg
+
+  local -a srcs=("$dir/Test Artist - Stereo Song [dQw4w9WgXcQ].wav" "$dir/mono_tagged.flac" "$dir/Surround (Official Video).m4a")
+  mapfile -t f < <(list_audio "$dir")
+  local -a all=()
+  for o in "${f[@]}"; do all+=("$dir/$o"); done
+  add_job convert "$dir/ogg-music" "$(join_files "${all[@]}")"
+  add_job combine "$dir/ogg-music" "$(join_files "${srcs[@]}")" 1 "$(mc_basename "Self Test Mix")"
+  info "Running queue"
+  run_queue || true
+
+  info "Checks"
+  for f in "${srcs[@]}"; do
+    o=$dir/ogg-music/$(mc_basename "$(basename -- "${f%.*}")").ogg
+    check "exists: ${o##*/}" test -s "$o"
+    ch=$(ffprobe -v error -show_entries stream=channels -of csv=p=0 "$o")
+    sr=$(ffprobe -v error -show_entries stream=sample_rate -of csv=p=0 "$o")
+    check "${o##*/} is mono 44100 Hz (got $ch ch, $sr Hz)" test "$ch" = 1 -a "$sr" = 44100
+    # Mean level, not peak: Vorbis overshoots peaks on a pure sine by ~1 dB at 32k.
+    # A naive -ac 1 downmix would show up here as +3 dB.
+    pin=$(volume_db "$f" mean); pout=$(volume_db "$o" mean)
+    check "${o##*/} mean $pout dB not above source $pin dB (+0.5 dB codec allowance)" \
+      awk -v i="$pin" -v o="$pout" 'BEGIN { exit !(o <= i + 0.5) }'
+  done
+  check "YouTube id stripped from name" test -s "$dir/ogg-music/testartiststereosong.ogg"
+  check "no partial files left" bash -c '! compgen -G "$1/*.part-*.ogg" >/dev/null' _ "$dir/ogg-music"
+
+  o=$dir/ogg-music/selftestmix.ogg
+  dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$o")
+  want=9   # 3 + 2 + 2 seconds of audio, plus two 1 s gaps
+  check "combined length ${dur}s is about ${want}s" \
+    awk -v d="$dur" -v w="$want" 'BEGIN { exit !(d > w - 0.3 && d < w + 0.3) }'
+  ch=$(ffprobe -v error -show_entries stream=channels -of csv=p=0 "$o")
+  check "combined file is mono" test "$ch" = 1
+
+  info "Export"
+  reset_export
+  auto_entries "${PRODUCED[@]}"
+  root=$(write_export)
+  info "  $root"
+  check "export files written" \
+    test -s "$root/INSTRUCTIONS.txt" -a -s "$root/sounds_snippet.yml" -a -s "$root/music_discs_snippet.yml"
+  check "one ogg per entry (${#E_NAME[@]})" \
+    test "$(find "$root/plugins/Nexo/pack/assets/$NS/sounds/music" -name '*.ogg' | wc -l)" = "${#E_NAME[@]}"
+  if command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null; then
+    check "snippets parse as YAML and items point at sound ids" python3 - "$root" <<'PY'
+import sys, yaml, pathlib
+root = pathlib.Path(sys.argv[1])
+sounds = yaml.safe_load((root / "sounds_snippet.yml").read_text())
+items = yaml.safe_load((root / "plugins/Nexo/items/thirdplace/music_discs.yml").read_text())
+assert isinstance(sounds, list) and sounds, "sounds snippet is not a list"
+for s in sounds:
+    assert s["id"].startswith("custom_music:music."), s
+    assert s["jukebox_playable"]["duration"].endswith("s"), s
+ids = {s["id"] for s in sounds}
+for k, v in items.items():
+    assert v["Components"]["jukebox_playable"] in ids, (k, v)
+    assert v["material"] == "PAPER"
+print("  yaml ok:", len(sounds), "sounds,", len(items), "items")
+PY
+  fi
+  printf '\n'
+  if ((fails)); then err "$fails check(s) failed"; return 1; fi
+  ok "All checks passed"
+}
+
+usage() {
+  cat <<EOF
+mcmusic: convert music to Minecraft-friendly Ogg Vorbis and export Nexo config.
+
+  mcmusic                 open the TUI (needs gum: sudo dnf install gum)
+  mcmusic --selftest [D]  run convert, combine and export on generated tones in D
+                          (default: a new temp folder)
+  mcmusic --help
+
+Output: mono Ogg Vorbis, $BITRATE, $SAMPLE_RATE Hz. Stereo and surround are downmixed
+with ffmpeg pan '<' so the result never gets louder than the source.
+Settings: $CONFIG_FILE
+EOF
+}
+
+main() {
+  case ${1:-} in
+    __convert)
+      shift
+      [[ -n ${MCMUSIC_LOG:-} ]] && exec 2>>"$MCMUSIC_LOG"
+      ffmpeg_convert "$@" ;;
+    __combine)
+      shift
+      [[ -n ${MCMUSIC_LOG:-} ]] && exec 2>>"$MCMUSIC_LOG"
+      ffmpeg_combine "$@" ;;
+    -h | --help) usage ;;
+    --selftest)
+      shift
+      need_deps
+      selftest "$@" ;;
+    '')
+      need_deps
+      need_tui
+      load_settings
+      tui_main ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"
