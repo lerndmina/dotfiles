@@ -478,70 +478,139 @@ write_items_snippet() {
   done
 }
 
-write_instructions() { # export root
-  local root=$1 i names items snd_rel items_rel nexo=$SERVER_NEXO_DIR host=$SERVER_HOST finds=''
-  snd_rel=pack/assets/$NS/sounds/music
-  items_rel=items/thirdplace
+# Upload commands for an export, one line each. INSTRUCTIONS.txt and the TUI's
+# copy menu both read these, so what you copy is what the file says.
+CMD_LABEL=() CMD_TEXT=()
+
+build_commands() { # export root
+  local root=$1 i c names items finds='' nexo=$SERVER_NEXO_DIR host=$SERVER_HOST
+  local snd=$SERVER_NEXO_DIR/pack/assets/$NS/sounds/music
+  local itm=$SERVER_NEXO_DIR/items/thirdplace
+  local snd_rel=pack/assets/$NS/sounds/music
   names=$(IFS='|'; echo "${E_NAME[*]}")
+  items=$(IFS='|'; echo "${E_ITEM[*]}")
   for i in "${E_NAME[@]}"; do finds+="-name $i.ogg -o "; done
   finds=${finds% -o }
-  items=$(IFS='|'; echo "${E_ITEM[*]}")
+  CMD_LABEL=() CMD_TEXT=()
+
+  CMD_LABEL+=("0. Go to the export folder")
+  CMD_TEXT+=("cd $(printf '%q' "$root")")
+
+  printf -v c "ssh %s 'grep -nE \"%s:music\\\\.(%s)[[:space:]]*\$\" \"%s/sounds.yml\"; grep -rnE \"^(%s):\" \"%s/items\"; find \"%s/pack\" -path \"*/.assetCache\" -prune -o -type f -path \"*/%s/sounds/*\" \\\\( %s \\\\) -print'" \
+    "$host" "$NS" "$names" "$nexo" "$items" "$nexo" "$nexo" "$NS" "$finds"
+  CMD_LABEL+=("1. Check for clashes on the server"); CMD_TEXT+=("$c")
+
+  printf -v c "ssh %s 'mkdir -p \"%s\"' && scp plugins/Nexo/%s/*.ogg %s:\"%s/\"" \
+    "$host" "$snd" "$snd_rel" "$host" "$snd"
+  CMD_LABEL+=("2. Upload the sound files"); CMD_TEXT+=("$c")
+
+  printf -v c "ssh %s 'cat >> \"%s/sounds.yml\"' < sounds_snippet.yml" "$host" "$nexo"
+  CMD_LABEL+=("3. Append the sounds to sounds.yml"); CMD_TEXT+=("$c")
+
+  printf -v c "ssh %s 'mkdir -p \"%s\" && test ! -e \"%s/music_discs.yml\"' && scp plugins/Nexo/items/thirdplace/music_discs.yml %s:\"%s/\"" \
+    "$host" "$itm" "$itm" "$host" "$itm"
+  CMD_LABEL+=("4a. First export only: upload music_discs.yml"); CMD_TEXT+=("$c")
+
+  printf -v c "ssh %s 'cat >> \"%s/music_discs.yml\"' < music_discs_snippet.yml" "$host" "$itm"
+  CMD_LABEL+=("4b. Later exports: append the disc snippet"); CMD_TEXT+=("$c")
+
+  CMD_LABEL+=("5a. Reload Nexo (server console)"); CMD_TEXT+=("nexo reload all")
+  CMD_LABEL+=("5b. Test a disc in game"); CMD_TEXT+=("/nexo give <player> ${E_ITEM[0]}")
+}
+
+# Commands sit at column 0 on their own line with a blank line either side,
+# so a triple-click or line selection copies exactly the command.
+write_instructions() { # export root
+  local root=$1 i
+  build_commands "$root"
   cat <<EOF
 mcmusic export, $(date '+%Y-%m-%d %H:%M'), ${#E_NAME[@]} track(s)
-Server Nexo folder: $nexo
-SSH host:           $host
-Run every command below from this folder:
-  cd $(printf '%q' "$root")
+Server Nexo folder: $SERVER_NEXO_DIR
+SSH host: $SERVER_HOST
 
 Tracks
 EOF
   {
-    printf '  Sound id\tItem id\tTitle\tArtist\tLength\n'
+    printf 'Sound id\tItem id\tTitle\tArtist\tLength\n'
     for i in "${!E_NAME[@]}"; do
-      printf '  %s\t%s\t%s\t%s\t%ss\n' "$NS:music.${E_NAME[i]}" "${E_ITEM[i]}" "${E_TITLE[i]}" "${E_ARTIST[i]:--}" "${E_DUR[i]}"
+      printf '%s\t%s\t%s\t%s\t%ss\n' "$NS:music.${E_NAME[i]}" "${E_ITEM[i]}" "${E_TITLE[i]}" "${E_ARTIST[i]:--}" "${E_DUR[i]}"
     done
   } | column -t -s $'\t'
   cat <<EOF
 
-1. Check nothing clashes with what's already on the server
-   Looks for the sound ids in sounds.yml, the item ids under items/, and .ogg files with
-   the same names anywhere in the pack (the old ItemsAdder folder included).
-   No output means no clashes. If something matches, rename it in mcmusic and export again.
+0. Go to the export folder. Every command below runs from here.
 
-     ssh $host 'grep -nE "$NS:music\\.($names)[[:space:]]*\$" "$nexo/sounds.yml"; grep -rnE "^($items):" "$nexo/items"; find "$nexo/pack" -path "*/.assetCache" -prune -o -type f -path "*/$NS/sounds/*" \\( $finds \\) -print'
+${CMD_TEXT[0]}
 
-2. Upload the sound files
-   Copy plugins/Nexo/$snd_rel/*.ogg to $nexo/$snd_rel/
+1. Check nothing clashes with what's already on the server.
+Looks for the sound ids in sounds.yml, the item ids under items/, and .ogg files with
+the same names anywhere in the pack (the old ItemsAdder folder included).
+No output means no clashes. If something matches, rename it in mcmusic and export again.
 
-     ssh $host 'mkdir -p "$nexo/$snd_rel"'
-     scp plugins/Nexo/$snd_rel/*.ogg $host:"$nexo/$snd_rel/"
+${CMD_TEXT[1]}
 
-3. Add the sounds to sounds.yml
-   Paste sounds_snippet.yml at the end of the "sounds:" list in $nexo/sounds.yml,
-   at column 0 like the other "- id:" entries. Today "sounds:" is the last section in
-   that file, so appending works too:
+2. Upload the sound files to $SERVER_NEXO_DIR/pack/assets/$NS/sounds/music/
 
-     ssh $host 'cat >> "$nexo/sounds.yml"' < sounds_snippet.yml
+${CMD_TEXT[2]}
 
-4. Add the disc items
-   First export only (the file doesn't exist on the server yet):
+3. Add the sounds to sounds.yml. This appends sounds_snippet.yml to the end of the file,
+which is the end of the "sounds:" list as long as "sounds:" is the last section (it is
+today). If it isn't, paste sounds_snippet.yml at the end of that list by hand instead.
 
-     ssh $host 'mkdir -p "$nexo/$items_rel" && test ! -e "$nexo/$items_rel/music_discs.yml"' && \\
-       scp plugins/Nexo/$items_rel/music_discs.yml $host:"$nexo/$items_rel/"
+${CMD_TEXT[3]}
 
-   If music_discs.yml already exists, DON'T copy it over (that deletes the discs already
-   in it). Append the snippet instead:
+4a. First export only: upload music_discs.yml. It only copies if the file doesn't exist
+on the server yet, so it can't overwrite the discs already there.
 
-     ssh $host 'cat >> "$nexo/$items_rel/music_discs.yml"' < music_discs_snippet.yml
+${CMD_TEXT[4]}
 
-5. Reload Nexo (server console)
+4b. Every later export: append the disc snippet to the existing music_discs.yml instead.
 
-     nexo reload all
+${CMD_TEXT[5]}
 
-   Test a disc in game:
+5a. Reload Nexo. Run this in the server console.
 
-     /nexo give <player> ${E_ITEM[0]}
+${CMD_TEXT[6]}
+
+5b. Test a disc in game, with your name in place of <player>.
+
+${CMD_TEXT[7]}
 EOF
+}
+
+# Puts one of the export's commands on the clipboard.
+copy_menu() {
+  local c i
+  local -a clip opts=()
+  if [[ -n ${WAYLAND_DISPLAY:-} ]] && command -v wl-copy >/dev/null; then
+    clip=(wl-copy)
+  elif [[ -n ${DISPLAY:-} ]] && command -v xclip >/dev/null; then
+    clip=(xclip -selection clipboard)
+  elif [[ -n ${DISPLAY:-} ]] && command -v xsel >/dev/null; then
+    clip=(xsel --clipboard --input)
+  else
+    warn "No clipboard tool found (wl-copy, xclip or xsel), so copy the commands from INSTRUCTIONS.txt."
+    pause
+    return 0
+  fi
+  for i in "${!CMD_LABEL[@]}"; do opts+=("Copy ${CMD_LABEL[i]}"); done
+  opts+=("Done")
+  c=${opts[0]}
+  while :; do
+    # --selected keeps the cursor on the last copied step.
+    c=$(printf '%s\n' "${opts[@]}" | gum choose --header "Copy a command to the clipboard" \
+          --height 20 --selected "$c") || return 0
+    [[ $c == Done ]] && return 0
+    for i in "${!CMD_LABEL[@]}"; do
+      if [[ $c == "Copy ${CMD_LABEL[i]}" ]]; then
+        if printf '%s' "${CMD_TEXT[i]}" | "${clip[@]}"; then
+          ok "Copied ${CMD_LABEL[i]}"
+        else
+          err "Copy failed."
+        fi
+      fi
+    done
+  done
 }
 
 write_export() { # prints the export folder
@@ -861,12 +930,15 @@ screen_export() {
   done
   ((${#E_NAME[@]})) || { warn "No tracks accepted, nothing exported."; pause; return 0; }
   root=$(write_export)
-  gum pager <"$root/INSTRUCTIONS.txt" || true
-  banner
-  ok "Exported ${#E_NAME[@]} track(s) to:"
-  info "  $root"
-  info "  INSTRUCTIONS.txt, sounds_snippet.yml, music_discs_snippet.yml, plugins/Nexo/..."
-  pause
+  build_commands "$root"   # write_export ran in a subshell; the copy menu needs these here
+  # Plain text, no pager: borders, line numbers and hard wraps break copy-paste.
+  clear
+  cat -- "$root/INSTRUCTIONS.txt"
+  printf '\n'
+  ok "Exported ${#E_NAME[@]} track(s) to $root"
+  info "Files: INSTRUCTIONS.txt, sounds_snippet.yml, music_discs_snippet.yml, plugins/Nexo/..."
+  printf '\n'
+  copy_menu
 }
 
 screen_settings() {
